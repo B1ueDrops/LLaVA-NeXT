@@ -4,6 +4,7 @@ from llava.model.builder import load_pretrained_model
 from llava.mm_utils import get_model_name_from_path, process_images, tokenizer_image_token
 from llava.constants import IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN, IGNORE_INDEX
 from llava.conversation import conv_templates, SeparatorStyle
+from ogutils.dump import dump_attentions
 
 import torch
 import cv2
@@ -83,6 +84,7 @@ cont = model.generate(
 # attentions: Tuple(Tuple(torch.Tensor)) [num_output_tokens, num_layers, (batch_size, q_num_heads, seq_len, seq_len)]
 # past_key_values: Tuple(Tuple(torch.Tensor)) [num_layers, 2, (batch_size, kv_head_num, seq_len , head_size)]
 output_tokens, attentions, past_key_values = cont['sequences'], cont['attentions'], cont['past_key_values']
+dump_attentions(attentions)
 
 prof.stop_profile()
 text_outputs = tokenizer.batch_decode(output_tokens[0], skip_special_tokens=True)
