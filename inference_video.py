@@ -1,3 +1,4 @@
+from deepspeed.profiling.flops_profiler import FlopsProfiler
 from operator import attrgetter
 from llava.model.builder import load_pretrained_model
 from llava.mm_utils import get_model_name_from_path, process_images, tokenizer_image_token
@@ -64,6 +65,8 @@ input_ids = tokenizer_image_token(prompt_question, tokenizer, IMAGE_TOKEN_INDEX,
 image_sizes = [frame.size for frame in video_frames]
 
 # Generate response
+prof = FlopsProfiler(model)
+prof.start_profile()
 cont = model.generate(
     input_ids,
     images=image_tensors,
@@ -71,7 +74,24 @@ cont = model.generate(
     do_sample=False,
     temperature=0,
     max_new_tokens=4096,
+    output_attentions=True,
     modalities=["video"],
+    use_cache=True,
+    return_dict_in_generate=True
 )
-text_outputs = tokenizer.batch_decode(cont, skip_special_tokens=True)
-print(text_outputs[0])
+# text_output: [batch_size, num_output_tokens]
+# attentions: Tuple(Tuple(torch.Tensor)) [num_output_tokens, num_layers, (batch_size, q_num_heads, seq_len, seq_len)]
+# past_key_values: Tuple(Tuple(torch.Tensor)) [num_layers, 2, (batch_size, kv_head_num, seq_len , head_size)]
+output_tokens, attentions, past_key_values = cont['sequences'], cont['attentions'], cont['past_key_values']
+
+prof.stop_profile()
+text_outputs = tokenizer.batch_decode(output_tokens[0], skip_special_tokens=True)
+flops = prof.get_total_flops()
+macs  = prof.get_total_macs()
+params = prof.get_total_params()
+duration = prof.get_total_duration()
+prof.print_model_aggregated_profile()
+print(f"num output tokens: {output_tokens.shape[1]}")
+print(f"flops: {flops}, macs: {macs}, params: {params}, duration: {duration}")
+print(f"prompt length: {input_ids[0].shape[0]}")
+print(f"output text: {text_outputs[0]}")
