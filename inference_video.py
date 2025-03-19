@@ -4,23 +4,18 @@ from llava.model.builder import load_pretrained_model
 from llava.mm_utils import get_model_name_from_path, process_images, tokenizer_image_token
 from llava.constants import IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN, IGNORE_INDEX
 from llava.conversation import conv_templates, SeparatorStyle
-from ogutils.dump import dump_attentions
+from ogutils.dump import DumpUtils
+from ogutils.video import VideoUtils
 
-import torch
-import cv2
-import numpy as np
-from PIL import Image
-import requests
 import copy
 import warnings
-from decord import VideoReader, cpu
 
 warnings.filterwarnings("ignore")
 # Load the OneVision model
 pretrained = "/data/lja/models/llava-onevision-qwen2-0.5b-ov"
 model_name = "llava_qwen"
-device = "cuda"
-device_map = {"": "cuda:0"}
+device = "cuda:1"
+device_map = {"": device}
 overwrite_config = {}
 overwrite_config["mm_vision_tower"] = "/data/lja/models/siglip-so400m-patch14-384"
 llava_model_args = {
@@ -32,23 +27,11 @@ tokenizer, model, image_processor, max_length = load_pretrained_model(pretrained
 model.eval()
 
 
-# Function to extract frames from video
-def load_video(video_path, max_frames_num):
-    if type(video_path) == str:
-        vr = VideoReader(video_path, ctx=cpu(0))
-    else:
-        vr = VideoReader(video_path[0], ctx=cpu(0))
-    total_frame_num = len(vr)
-    uniform_sampled_frames = np.linspace(0, total_frame_num - 1, max_frames_num, dtype=int)
-    frame_idx = uniform_sampled_frames.tolist()
-    spare_frames = vr.get_batch(frame_idx).asnumpy()
-    return spare_frames  # (frames, height, width, channels)
-
-
 # Load and process video
 video_path = "/home/lja/static/jobs.mp4"
-video_frames = load_video(video_path, 16)
-print(video_frames.shape) # (16, 1024, 576, 3)
+#video_frames = VideoUtils.load_video(video_path, 16)
+_, video_frames, key_frame_idx = VideoUtils.load_video_with_keyframes(video_path)
+print(f'[INFO]: Input Video Tensor Shape is {video_frames.shape}, Type is {type(video_frames)}')
 image_tensors = []
 frames = image_processor.preprocess(video_frames, return_tensors="pt")["pixel_values"].half().cuda()
 image_tensors.append(frames)
@@ -84,10 +67,10 @@ cont = model.generate(
 # attentions: Tuple(Tuple(torch.Tensor)) [num_output_tokens, num_layers, (batch_size, q_num_heads, seq_len, seq_len)]
 # past_key_values: Tuple(Tuple(torch.Tensor)) [num_layers, 2, (batch_size, kv_head_num, seq_len , head_size)]
 output_tokens, attentions, past_key_values = cont['sequences'], cont['attentions'], cont['past_key_values']
-dump_attentions(attentions)
-
+# DumpUtils.dump_kv_cache(past_key_values)
+# DumpUtils.dump_attentions(attentions)
 prof.stop_profile()
-text_outputs = tokenizer.batch_decode(output_tokens[0], skip_special_tokens=True)
+text_outputs = tokenizer.batch_decode(output_tokens, skip_special_tokens=True)
 flops = prof.get_total_flops()
 macs  = prof.get_total_macs()
 params = prof.get_total_params()
