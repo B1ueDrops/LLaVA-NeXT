@@ -22,7 +22,7 @@ class InferSession:
             pretrained_path='/data/lja/models/llava-onevision-qwen2-0.5b-ov',
             mm_vision_tower='/data/lja/models/siglip-so400m-patch14-384',
             device='cuda:1',
-            video_path='/home/lja/static/jobs.mp4',
+            video_path='/home/lja/static/sample.mp4',
             prompt='Describe this video',
             only_key_frames = False,
             dump_attentions = False,
@@ -48,6 +48,12 @@ class InferSession:
             "multimodal": True,
         }
         llava_model_args["overwrite_config"] = overwrite_config
+        # tokenzier用下面这段代码产生:
+        # tokenizer = AutoTokenizer.from_pretrained(model_path)
+        # 其中model_path是/data/lja/models/llava-onevision-qwen2-0.5b-ov
+        # model用下面这段代码产生:
+        # model = AutoModelForCausalLM.from_pretrained(model_path, low_cpu_mem_usage=True, **kwargs)
+        # image_processor = vision_tower.image_processor
         tokenizer, model, image_processor, max_length = load_pretrained_model(self.pretrained, None, self.model_name, device_map=device_map, attn_implementation="sdpa", **llava_model_args)
         model.eval()
         video_frames, key_frames, key_frame_idx = VideoUtils.load_video_with_keyframes(self.video_path)
@@ -60,6 +66,7 @@ class InferSession:
 
         image_tensors = []
         Logger.info('Processing Frame Tokens...')
+        # Frames是图片预处理后的结果
         frames = image_processor.preprocess(infer_frames, return_tensors="pt")["pixel_values"].half().cuda()
         image_tensors.append(frames)
         Logger.debug(f'Image Tensor Shape: {image_tensors[0].shape}')
@@ -73,11 +80,38 @@ class InferSession:
         prompt_question = conv.get_prompt()
 
         input_ids = tokenizer_image_token(prompt_question, tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt").unsqueeze(0).to(self.device)
+        # 获取video_token的起始id
+        video_token_start_pos = torch.where(input_ids == IMAGE_TOKEN_INDEX)[1].item()
+        # 获取所有非video token的总数
+        num_text_tokens = input_ids.shape[1]
         image_sizes = [frame.size for frame in infer_frames]
         # Generate response
         prof = FlopsProfiler(model)
         prof.start_profile()
         Logger.info('Start model inference...')
+        inputs_embeds = model.generate_embeddings(
+            input_ids,
+            images=image_tensors,
+            image_sizes=image_sizes,
+            do_sample=False,
+            temperature=0,
+            max_new_tokens=4096,
+            output_attentions=True,
+            modalities=["video"],
+            use_cache=True,
+            return_dict_in_generate=True
+        )
+        # 计算video token的总数
+        num_video_tokens = inputs_embeds.shape[1] - num_text_tokens
+        video_tokens = inputs_embeds[0][video_token_start_pos:video_token_start_pos+num_video_tokens]
+
+        # 现在video tokens已经准备好
+        num_frames = frames.shape[0]
+        embedding_size = video_tokens.shape[1]
+        frame_video_tokens = video_tokens.contiguous().view(num_frames, num_video_tokens // num_frames, embedding_size)
+
+
+        exit()
         cont = model.generate(
             input_ids,
             images=image_tensors,
