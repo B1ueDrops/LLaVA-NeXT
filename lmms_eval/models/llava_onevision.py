@@ -1,5 +1,4 @@
-# Implementation of DyCoke
-
+# This is default llava_onevision
 import copy
 import json
 import logging
@@ -71,14 +70,14 @@ class Llava_OneVision(lmms):
 
     def __init__(
         self,
-        pretrained: str = "liuhaotian/llava-v1.5-7b",
+        pretrained: str = "lmms-lab/llava-onevision-qwen2-7b-ov",
         truncation: Optional[bool] = True,
         device: Optional[str] = "cuda:0",
         batch_size: Optional[Union[int, str]] = 1,
         model_name: Optional[str] = None,
         attn_implementation: Optional[str] = best_fit_attn_implementation,
         device_map: Optional[str] = "cuda:0",
-        conv_template: Optional[str] = "vicuna_v1",
+        conv_template: Optional[str] = "qwen_1_5",
         use_cache: Optional[bool] = True,
         truncate_context: Optional[bool] = False,  # whether to truncate the context in generation, set it False for LLaVA-1.6
         customized_config: Optional[str] = None,  # ends in json
@@ -87,12 +86,6 @@ class Llava_OneVision(lmms):
         mm_spatial_pool_mode: Optional[str] = "bilinear",
         token_strategy: Optional[str] = "single",  # could be "single" or "multiple", "multiple" denotes adding multiple <image> tokens for each frame
         video_decode_backend: str = "decord",
-        dycoke: Optional[bool] = False,
-        dycoke_l: Optional[int] = 3,
-        dycoke_p: Optional[float] = 0.8,
-        dycoke_num_tokens_per_frame: Optional[int] = 196,
-        dycoke_k: Optional[float] = 0.7,
-        image_token_start_index: Optional[int] = 14,
         **kwargs,
     ) -> None:
         super().__init__()
@@ -133,24 +126,13 @@ class Llava_OneVision(lmms):
         overwrite_config["mm_spatial_pool_stride"] = self.mm_spatial_pool_stride
         overwrite_config["mm_spatial_pool_mode"] = self.mm_spatial_pool_mode
         overwrite_config["mm_vision_tower"] = "/root/autodl-tmp/models/siglip-so400m-patch14-384"
+
         cfg_pretrained = AutoConfig.from_pretrained(self.pretrained)
-
-        if cfg_pretrained.architectures[0] == "LlavaLlamaForCausalLM":  # Ugly code, only used in  vicuna that needs ROPE
-            if "224" in cfg_pretrained.mm_vision_tower:
-                least_token_number = self.max_frames_num * (16 // self.mm_spatial_pool_stride) ** 2 + 1000
-            else:
-                least_token_number = self.max_frames_num * (24 // self.mm_spatial_pool_stride) ** 2 + 1000
-
-            scaling_factor = math.ceil(least_token_number / 4096)
-            if scaling_factor >= 2:
-                overwrite_config["rope_scaling"] = {"factor": float(scaling_factor), "type": "linear"}
-                overwrite_config["max_sequence_length"] = 4096 * scaling_factor
-                overwrite_config["tokenizer_model_max_length"] = 4096 * scaling_factor
 
         llava_model_args["overwrite_config"] = overwrite_config
         try:
             # Try to load the model with the multimodal argument
-            self._tokenizer, self._model, self._image_processor, self._max_length = load_pretrained_model(pretrained, None, model_name, device_map=self.device_map, **llava_model_args, dycoke=dycoke, dycoke_l=dycoke_l, dycoke_p=dycoke_p, dycoke_num_tokens_per_frame=dycoke_num_tokens_per_frame, dycoke_k=dycoke_k, image_token_start_index=image_token_start_index)
+            self._tokenizer, self._model, self._image_processor, self._max_length = load_pretrained_model(pretrained, None, model_name, device_map=self.device_map, **llava_model_args)
         except TypeError:
             # for older versions of LLaVA that don't have multimodal argument
             llava_model_args.pop("multimodal", None)
@@ -268,8 +250,14 @@ class Llava_OneVision(lmms):
         res = []
         pbar = tqdm(total=len(requests), disable=(self.rank != 0), desc="Model Responding")
 
+        origin_image_aspect_ratio = getattr(self._config, "image_aspect_ratio", None)
+
         for contexts, doc_to_target, doc_to_visual, doc_id, task, split in [reg.args for reg in requests]:
             visual = doc_to_visual(self.task_dict[task][split][doc_id])
+
+            if origin_image_aspect_ratio is not None and self._config.image_aspect_ratio != origin_image_aspect_ratio:
+                self._config.image_aspect_ratio = origin_image_aspect_ratio
+                eval_logger.info(f"Resetting image aspect ratio to {origin_image_aspect_ratio}")
 
             if visual is None or visual == []:
                 visual = None
@@ -294,7 +282,8 @@ class Llava_OneVision(lmms):
 
                     task_type = "video"
 
-                elif type(visual[0]) == PIL.Image.Image:
+                # elif type(visual[0]) == PIL.Image.Image:
+                elif isinstance(visual[0], PIL.Image.Image):
                     image_tensor = process_images(visual, self._image_processor, self._config)
                     if type(image_tensor) is list:
                         image_tensor = [_image.to(dtype=torch.float16, device=self.device) for _image in image_tensor]
@@ -376,10 +365,13 @@ class Llava_OneVision(lmms):
         return res
 
     def flatten(self, input):
+        if not input or any(i is None for i in input):
+            return []
         new_list = []
         for i in input:
-            for j in i:
-                new_list.append(j)
+            if i:
+                for j in i:
+                    new_list.append(j)
         return new_list
 
     def load_video(self, video_path, max_frames_num):
@@ -414,6 +406,9 @@ class Llava_OneVision(lmms):
         chunks = re_ords.get_batched(n=self.batch_size, batch_fn=None)
         num_iters = len(requests) // self.batch_size if len(requests) % self.batch_size == 0 else len(requests) // self.batch_size + 1
         pbar = tqdm(total=num_iters, disable=(self.rank != 0), desc="Model Responding")
+
+        origin_image_aspect_ratio = getattr(self._config, "image_aspect_ratio", None)
+
         for chunk in chunks:
             batched_contexts, all_gen_kwargs, batched_doc_to_visual, batched_doc_id, batched_task, batched_split = zip(*chunk)
             task = batched_task[0]
@@ -428,8 +423,12 @@ class Llava_OneVision(lmms):
                 gen_kwargs.pop("until")
 
             question_input = []
-
+            # import ipdb; ipdb.set_trace()
             for visual, context in zip(batched_visuals, batched_contexts):
+                if origin_image_aspect_ratio is not None and self._config.image_aspect_ratio != origin_image_aspect_ratio:
+                    self._config.image_aspect_ratio = origin_image_aspect_ratio
+                    eval_logger.info(f"Resetting image aspect ratio to {origin_image_aspect_ratio}")
+
                 if visual is None or visual == []:  # for text-only tasks.
                     visual = None
                     task_type = "text"
@@ -572,6 +571,7 @@ class Llava_OneVision(lmms):
 
         pbar.close()
         return res
+
     def generate_until_multi_round(self, requests: List[Instance]) -> List[str]:
         res = []
 
@@ -584,3 +584,205 @@ class Llava_OneVision(lmms):
             # - any OOMs will happen right away rather than near the end
             toks = self.tok_encode(x[0])
             return -len(toks), x[0]
+
+        # we group requests by their generation_kwargs,
+        # so that we don't try to execute e.g. greedy sampling and temp=0.8 sampling
+        # in the same batch.
+        metadata = requests[0].metadata
+        re_ords = utils.Collator([reg.args for reg in requests], _collate, grouping=True)
+        chunks = re_ords.get_batched(n=self.batch_size, batch_fn=None)
+        num_iters = len(requests) // self.batch_size if len(requests) % self.batch_size == 0 else len(requests) // self.batch_size + 1
+        pbar = tqdm(total=num_iters, disable=(self.rank != 0), desc="Model Responding")
+
+        origin_image_aspect_ratio = getattr(self._config, "image_aspect_ratio", None)
+
+        for chunk in chunks:
+            batched_contexts, all_gen_kwargs, batched_doc_to_visual, batched_doc_to_text, batched_doc_id, batched_task, batched_split = zip(*chunk)
+            task = batched_task[0]
+            split = batched_split[0]
+            batched_visuals = [batched_doc_to_visual[0](self.task_dict[task][split][ids]) for ids in batched_doc_id]  # [B, N]
+            assert len(batched_visuals) == 1
+
+            # we assume all gen kwargs in the batch are the same
+            # this is safe to assume because the `grouper` object ensures it.
+            gen_kwargs = all_gen_kwargs[0]
+            if "until" in gen_kwargs:
+                gen_kwargs.pop("until")
+
+            # multi round inference: terminate when receiving signal from the doc_to_text
+            round_idx = 0
+            batched_round_res = []
+            batched_previous_round_info = None
+            while True:
+                question_input = []
+
+                if round_idx != 0:  # get current round visual and context from doc_to_text function
+                    batched_visuals, batched_contexts, batched_terminal_singal, batched_round_res, batched_previous_round_info = list(
+                        zip(
+                            *[
+                                batched_doc_to_text[0](
+                                    self.task_dict[task][split][ids],
+                                    previous_output=[round_res[ids_idx] for round_res in batched_round_res],
+                                    round_idx=round_idx,
+                                    previous_round_info=batched_previous_round_info[ids_idx] if batched_previous_round_info is not None else None,
+                                )
+                                for ids_idx, ids in enumerate(batched_doc_id)
+                            ]
+                        )
+                    )
+                    # import ipdb; ipdb.set_trace()
+                    batched_round_res = list(zip(*batched_round_res))  # [(r1_1, r1_2), (r2_1, r2_2), ...]
+                    if batched_terminal_singal[0]:  # terminal signal from doc_to_text function
+                        break
+
+                for visual, context in zip(batched_visuals, batched_contexts):
+                    if origin_image_aspect_ratio is not None and self._config.image_aspect_ratio != origin_image_aspect_ratio:
+                        self._config.image_aspect_ratio = origin_image_aspect_ratio
+                        eval_logger.info(f"Resetting image aspect ratio to {origin_image_aspect_ratio}")
+
+                    if visual is None or visual == []:  # for text-only tasks.
+                        visual = None
+                        task_type = "text"
+                        placeholder_count = 0
+                        image_tensor = None
+                    else:
+                        if len(visual) > 1 or "image_aspect_ratio" not in self._config.__dict__:  # for multi image case, we treat per image aspect ratio as "pad" by default.
+                            self._config.image_aspect_ratio = getattr(gen_kwargs, "image_aspect_ratio", "pad")
+                            eval_logger.info(f"In Multi-Image setting, image aspect ratio: {self._config.image_aspect_ratio}")
+
+                        if "task_type" in metadata and metadata["task_type"] == "video" and "sample_frames" in metadata:  # overwrite logic for video task with multiple static image frames
+                            assert type(visual) == list, "sample_frames must be specified for video task"
+                            sample_indices = np.linspace(0, len(visual) - 1, metadata["sample_frames"], dtype=int)
+                            visual = [visual[i] for i in sample_indices]
+                            assert len(visual) == metadata["sample_frames"]
+
+                            image_tensor = process_images(visual, self._image_processor, self._config)
+                            if type(image_tensor) is list:
+                                image_tensor = [_image.to(dtype=torch.float16, device=self.device) for _image in image_tensor]
+                            else:
+                                image_tensor = image_tensor.to(dtype=torch.float16, device=self.device)
+
+                            task_type = "video"
+                            placeholder_count = 1
+
+                        elif type(visual[0]) == PIL.Image.Image:  # For image, multi-image tasks
+                            image_tensor = process_images(visual, self._image_processor, self._config)
+                            if type(image_tensor) is list:
+                                image_tensor = [_image.to(dtype=torch.float16, device=self.device) for _image in image_tensor]
+                            else:
+                                image_tensor = image_tensor.to(dtype=torch.float16, device=self.device)
+
+                            task_type = "image"
+                            placeholder_count = len(visual) if isinstance(visual, list) else 1
+
+                        elif type(visual[0]) == str:  # For video task
+                            image_tensor = []
+                            try:
+                                if self.video_decode_backend == "decord":
+                                    frames = self.load_video(visual, self.max_frames_num)
+                                elif self.video_decode_backend == "pyav":
+                                    frames = read_video_pyav(visual[0], num_frm=self.max_frames_num)
+                                frames = self._image_processor.preprocess(frames, return_tensors="pt")["pixel_values"].half().cuda()
+                                image_tensor.append(frames)
+                            except Exception as e:
+                                eval_logger.error(f"Error {e} in loading video")
+                                image_tensor = None
+
+                            task_type = "video"
+                            placeholder_count = len(frames) if self.token_strategy == "multiple" else 1
+
+                    if image_tensor is not None and len(image_tensor) != 0 and DEFAULT_IMAGE_TOKEN not in context:
+                        """
+                        Three senarios:
+                        1. No image, and there for, no image token should be added.
+                        2. image token is already specified in the context, so we don't need to add it.
+                        3. image token is not specified in the context and there is image inputs, so we need to add it. In this case, we add the image token at the beginning of the context and add a new line.
+                        4. For video tasks, we could add a <image> token or multiple <image> tokens for each frame in the context. This depends on the training strategy and should balance in test to decide which is better
+                        """
+                        # if task_type == "image": # indeed in multi-image case, not the video in frames.
+                        #     image_tokens = [DEFAULT_IMAGE_TOKEN] * placeholder_count if isinstance(visual, list) else [DEFAULT_IMAGE_TOKEN]
+                        # elif task_type == "video":
+                        # image_tokens = [DEFAULT_IMAGE_TOKEN] * placeholder_count if self.token_strategy == "multiple" else [DEFAULT_IMAGE_TOKEN]
+                        image_tokens = [DEFAULT_IMAGE_TOKEN] * placeholder_count
+                        image_tokens = " ".join(image_tokens)
+                        question = image_tokens + "\n" + context
+                    else:
+                        question = context
+
+                    # This is much safer for llama3, as we now have some object type in it
+                    if "llama_3" in self.conv_template:
+                        conv = copy.deepcopy(conv_templates[self.conv_template])
+                    else:
+                        conv = conv_templates[self.conv_template].copy()
+
+                    if utils.is_json(question):  # conversational question input
+                        question = json.loads(question)
+                        for idx, item in enumerate(question):
+                            role = conv.roles[idx % 2]
+                            message = item["value"]
+                            conv.append_message(role, message)
+
+                        assert len(conv.messages) % 2 == 1
+                        conv.append_message(conv.roles[1], None)
+                        prompt_question = conv.get_prompt()
+                        question_input.append(prompt_question)
+                    else:  # only simple string for question
+                        conv.append_message(conv.roles[0], question)
+                        conv.append_message(conv.roles[1], None)
+                        prompt_question = conv.get_prompt()
+                        question_input.append(prompt_question)
+
+                # preconfigure gen_kwargs with defaults
+                if "max_new_tokens" not in gen_kwargs:
+                    gen_kwargs["max_new_tokens"] = 1024
+                if "temperature" not in gen_kwargs:
+                    gen_kwargs["temperature"] = 0
+                if "do_sample" not in gen_kwargs:
+                    gen_kwargs["do_sample"] = False
+                if "top_p" not in gen_kwargs:
+                    gen_kwargs["top_p"] = None
+                if "num_beams" not in gen_kwargs:
+                    gen_kwargs["num_beams"] = 1
+
+                input_ids_list = [tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt") for prompt in question_input]
+                pad_token_ids = self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else self.tokenizer.eos_token_id
+                input_ids = self.pad_sequence(input_ids_list, batch_first=True, padding_value=pad_token_ids).to(self.device)
+                attention_masks = input_ids.ne(pad_token_ids).to(self.device)
+
+                if task_type == "image":
+                    gen_kwargs["image_sizes"] = [batched_visuals[0][idx].size for idx in range(len(batched_visuals[0]))]
+                elif task_type == "video":
+                    stop_str = conv.sep if conv.sep_style != SeparatorStyle.TWO else conv.sep2
+                    keywords = [stop_str]
+                    stopping_criteria = KeywordsStoppingCriteria(keywords, self.tokenizer, input_ids)
+                    gen_kwargs["modalities"] = ["video"]
+                    gen_kwargs["stopping_criteria"] = [stopping_criteria]
+                    self._config.mm_spatial_pool_stride = self.mm_spatial_pool_stride
+                    self._config.mm_spatial_pool_mode = self.mm_spatial_pool_mode
+
+                # These steps are not in LLaVA's original code, but are necessary for generation to work
+                # TODO: attention to this major generation step...
+                if "image_aspect_ratio" in gen_kwargs.keys():
+                    gen_kwargs.pop("image_aspect_ratio")
+                try:
+                    with torch.inference_mode():
+                        cont = self.model.generate(input_ids, attention_mask=attention_masks, pad_token_id=pad_token_ids, images=image_tensor, use_cache=self.use_cache, **gen_kwargs)
+                        # cont = self.model.generate(qwen_input_ids, pad_token_id=pad_token_ids, images=image_tensor, use_cache=self.use_cache, **gen_kwargs)
+
+                    text_outputs = self.tokenizer.batch_decode(cont, skip_special_tokens=True)
+                except Exception as e:
+                    raise e
+
+                text_outputs = [response.strip() for response in text_outputs]
+                batched_round_res.append(text_outputs)
+
+                round_idx += 1
+
+            res.extend(list(zip(*batched_round_res)))
+            self.cache_hook.add_partial("generate_until_multi_round", (context, gen_kwargs), batched_round_res)
+            pbar.update(1)
+            # reorder this group of results back to original unsorted form
+        res = re_ords.get_original(res)
+
+        pbar.close()
+        return res
