@@ -60,7 +60,6 @@ cache_name = yaml.safe_load("".join(safe_data))["dataset_kwargs"]["cache_dir"]
 
 
 def urbanvideobench_doc_to_visual(doc):
-    breakpoint()
     cache_dir = os.path.join(base_cache_dir, cache_name)
     # TODO
     video_path = "videos" + "/" + doc["video_id"]
