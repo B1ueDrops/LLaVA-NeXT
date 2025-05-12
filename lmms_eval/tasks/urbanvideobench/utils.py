@@ -164,16 +164,6 @@ def urbanvideobench_aggregate_results(results):
         else:
             raise ValueError(f"Unknown question type: {question_type}")
 
-    output["object_rel_direction_accuracy"] = (
-        sum(
-            [
-                output.pop("object_rel_direction_easy_accuracy"),
-                output.pop("object_rel_direction_medium_accuracy"),
-                output.pop("object_rel_direction_hard_accuracy"),
-            ]
-        )
-        / 3.0
-    )
 
     output["overall"] = sum([_ for _ in output.values()]) / len(output)
     eval_logger.info(f"Evaluation results: {output}")
