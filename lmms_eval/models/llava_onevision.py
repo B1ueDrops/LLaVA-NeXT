@@ -2,6 +2,7 @@
 import copy
 import json
 import logging
+import os
 import math
 import re
 import warnings
@@ -377,13 +378,27 @@ class Llava_OneVision(lmms):
     def load_video(self, video_path, max_frames_num):
         if type(video_path) == str:
             vr = VideoReader(video_path, ctx=cpu(0))
+            video_file_name = os.path.basename(video_path)
         else:
             vr = VideoReader(video_path[0], ctx=cpu(0))
+            video_file_name = os.path.basename(video_path[0])
         total_frame_num = len(vr)
         uniform_sampled_frames = np.linspace(0, total_frame_num - 1, max_frames_num, dtype=int)
-        frame_idx = uniform_sampled_frames.tolist()
-        spare_frames = vr.get_batch(frame_idx).asnumpy()
-        return spare_frames  # (frames, height, width, channels)
+        # AKS with vsi-bench
+        target_video_info = None
+        with open('/root/autodl-tmp/vsi_bench_aks.json') as f:
+            video_infos = json.load(f)
+            for video_info in video_infos:
+                if video_info['video_id'] == video_file_name:
+                    target_video_info = video_info
+                    break
+        if target_video_info is None:
+            frame_idx = uniform_sampled_frames.tolist()
+            sparse_frames = vr.get_batch(frame_idx).asnumpy()
+        else:
+            frame_idx = list(target_video_info['aks_res'])
+            sparse_frames = vr.get_batch(frame_idx).asnumpy()
+        return sparse_frames  # (frames, height, width, channels)
 
     def generate_until(self, requests: List[Instance]) -> List[str]:
         res = []
@@ -554,6 +569,7 @@ class Llava_OneVision(lmms):
             if "image_aspect_ratio" in gen_kwargs.keys():
                 gen_kwargs.pop("image_aspect_ratio")
             try:
+                # This is inference entry point
                 with torch.inference_mode():
                     cont = self.model.generate(input_ids, attention_mask=attention_masks, pad_token_id=pad_token_ids, images=image_tensor, use_cache=self.use_cache, **gen_kwargs)
                     # cont = self.model.generate(qwen_input_ids, pad_token_id=pad_token_ids, images=image_tensor, use_cache=self.use_cache, **gen_kwargs)
