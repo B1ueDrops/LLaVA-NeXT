@@ -384,20 +384,8 @@ class Llava_OneVision(lmms):
             video_file_name = os.path.basename(video_path[0])
         total_frame_num = len(vr)
         uniform_sampled_frames = np.linspace(0, total_frame_num - 1, max_frames_num, dtype=int)
-        # AKS with vsi-bench
-        target_video_info = None
-        with open('/root/autodl-tmp/vsi_bench_aks.json') as f:
-            video_infos = json.load(f)
-            for video_info in video_infos:
-                if video_info['video_id'] == video_file_name:
-                    target_video_info = video_info
-                    break
-        if target_video_info is None:
-            frame_idx = uniform_sampled_frames.tolist()
-            sparse_frames = vr.get_batch(frame_idx).asnumpy()
-        else:
-            frame_idx = list(target_video_info['aks_res'])
-            sparse_frames = vr.get_batch(frame_idx).asnumpy()
+        frame_idx = uniform_sampled_frames.tolist()
+        sparse_frames = vr.get_batch(frame_idx).asnumpy()
         return sparse_frames  # (frames, height, width, channels)
 
     def generate_until(self, requests: List[Instance]) -> List[str]:
