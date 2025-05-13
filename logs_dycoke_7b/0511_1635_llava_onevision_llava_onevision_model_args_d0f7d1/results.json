@@ -1,0 +1,123 @@
+{
+    "results": {
+        "vsibench": {
+            "alias": "vsibench",
+            "vsibench_score,none": {
+                "obj_appearance_order_accuracy": 0.23948220064724918,
+                "object_abs_distance_MRA:.5:.95:.05": 0.20107913669064748,
+                "object_counting_MRA:.5:.95:.05": 0.4490265486725664,
+                "object_rel_distance_accuracy": 0.4352112676056338,
+                "object_size_estimation_MRA:.5:.95:.05": 0.47114375655823715,
+                "room_size_estimation_MRA:.5:.95:.05": 0.11562499999999999,
+                "route_planning_accuracy": 0.29381443298969073,
+                "object_rel_direction_accuracy": 0.3499513668010887,
+                "overall": 0.3194167137456391
+            },
+            "vsibench_score_stderr,none": "N/A"
+        }
+    },
+    "group_subtasks": {
+        "vsibench": []
+    },
+    "configs": {
+        "vsibench": {
+            "task": "vsibench",
+            "dataset_path": "/root/autodl-tmp/VSI-Bench",
+            "dataset_kwargs": {
+                "token": true,
+                "cache_dir": "/root/autodl-tmp/VSI-Bench"
+            },
+            "test_split": "test",
+            "full_docs": false,
+            "process_results_use_image": false,
+            "process_docs": "<function process_docs at 0x7eff781a68c0>",
+            "doc_to_visual": "<function vsibench_doc_to_visual at 0x7eff781a6f80>",
+            "doc_to_text": "<function vsibench_doc_to_text at 0x7eff781a77f0>",
+            "doc_to_target": "ground_truth",
+            "process_results": "<function vsibench_process_results at 0x7eff78124550>",
+            "description": "",
+            "target_delimiter": " ",
+            "fewshot_delimiter": "\n\n",
+            "num_fewshot": 0,
+            "metric_list": [
+                {
+                    "metric": "vsibench_score",
+                    "aggregation": "<function vsibench_aggregate_results at 0x7eff779ec670>",
+                    "higher_is_better": true
+                }
+            ],
+            "output_type": "generate_until",
+            "generation_kwargs": {
+                "max_new_tokens": 16,
+                "temperature": 0.0,
+                "top_p": 1.0,
+                "num_beams": 1,
+                "do_sample": false,
+                "until": [
+                    "\n\n"
+                ]
+            },
+            "repeats": 1,
+            "should_decontaminate": false,
+            "metadata": [
+                {
+                    "version": 0.0
+                }
+            ],
+            "lmms_eval_specific_kwargs": {
+                "default": {
+                    "pre_prompt": "",
+                    "mca_post_prompt": "Answer with the option's letter from the given choices directly.",
+                    "na_post_prompt": "Please answer the question using a single word or phrase."
+                },
+                "gemini_api": {
+                    "pre_prompt": "",
+                    "mca_post_prompt": "Answer with the option's letter from the given choices directly.",
+                    "na_post_prompt": "Do not response anything other than a single number!"
+                },
+                "gpt4v": {
+                    "pre_prompt": "",
+                    "mca_post_prompt": "Answer with the option's letter from the given choices directly.",
+                    "na_post_prompt": "Do not response anything other than a single number!"
+                },
+                "pre_prompt": "",
+                "mca_post_prompt": "Answer with the option's letter from the given choices directly.",
+                "na_post_prompt": "Please answer the question using a single word or phrase."
+            }
+        }
+    },
+    "versions": {
+        "vsibench": "Yaml"
+    },
+    "n-shot": {
+        "vsibench": 0
+    },
+    "higher_is_better": {
+        "vsibench": {
+            "vsibench_score": true
+        }
+    },
+    "n-samples": {
+        "vsibench": {
+            "original": 5130,
+            "effective": 5130
+        }
+    },
+    "config": {
+        "model": "llava_onevision",
+        "model_args": "pretrained=/root/autodl-tmp/models/llava-onevision-qwen2-7b-ov,conv_template=qwen_1_5,model_name=llava_qwen,device_map=auto,dycoke=True",
+        "batch_size": "1",
+        "batch_sizes": [],
+        "device": null,
+        "use_cache": null,
+        "limit": null,
+        "bootstrap_iters": 100000,
+        "gen_kwargs": "",
+        "random_seed": 0,
+        "numpy_seed": 1234,
+        "torch_seed": 1234,
+        "fewshot_seed": 1234
+    },
+    "git_hash": "8df4296",
+    "date": "0511_1913"
+}

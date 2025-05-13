@@ -1,0 +1,131 @@
+{
+    "results": {
+        "urbanvideobench": {
+            "alias": "urbanvideobench",
+            "urbanvideobench_score,none": {
+                "Action Generation_accuracy": 0.2003381234150465,
+                "Association Reasoning_accuracy": 0.1350210970464135,
+                "Causal_accuracy": 0.6120689655172413,
+                "Cognitive Map_accuracy": 0.5296296296296297,
+                "Counterfactual_accuracy": 0.39552238805970147,
+                "Duration_accuracy": 0.5151515151515151,
+                "Goal Detection_accuracy": 0.25625,
+                "High-level Planning_accuracy": 0.5095785440613027,
+                "Landmark Position_accuracy": 0.3139269406392694,
+                "Object Recall_accuracy": 0.6511627906976745,
+                "Progress Evaluation_accuracy": 0.2266325224071703,
+                "Proximity_accuracy": 0.5546218487394958,
+                "Scene Recall_accuracy": 0.782608695652174,
+                "Sequence Recall_accuracy": 0.5478260869565217,
+                "Start/End Position_accuracy": 0.5753424657534246,
+                "Trajectory Captioning_accuracy": 0.4584323040380047,
+                "overall": 0.4540071198602865
+            },
+            "urbanvideobench_score_stderr,none": "N/A"
+        }
+    },
+    "group_subtasks": {
+        "urbanvideobench": []
+    },
+    "configs": {
+        "urbanvideobench": {
+            "task": "urbanvideobench",
+            "dataset_path": "/root/autodl-tmp/UrbanVideo-Bench",
+            "dataset_kwargs": {
+                "token": true,
+                "cache_dir": "/root/autodl-tmp/UrbanVideo-Bench"
+            },
+            "test_split": "train",
+            "full_docs": false,
+            "process_results_use_image": false,
+            "process_docs": "<function process_docs at 0x7fd1a3d029e0>",
+            "doc_to_visual": "<function urbanvideobench_doc_to_visual at 0x7fd1a3d03130>",
+            "doc_to_text": "<function urbanvideobench_doc_to_text at 0x7fd1a3d03a30>",
+            "doc_to_target": "ground_truth",
+            "process_results": "<function urbanvideobench_process_results at 0x7fd1a3557ac0>",
+            "description": "",
+            "target_delimiter": " ",
+            "fewshot_delimiter": "\n\n",
+            "num_fewshot": 0,
+            "metric_list": [
+                {
+                    "metric": "urbanvideobench_score",
+                    "aggregation": "<function urbanvideobench_aggregate_results at 0x7fd1a3554d30>",
+                    "higher_is_better": true
+                }
+            ],
+            "output_type": "generate_until",
+            "generation_kwargs": {
+                "max_new_tokens": 16,
+                "temperature": 0.0,
+                "top_p": 1.0,
+                "num_beams": 1,
+                "do_sample": false,
+                "until": [
+                    "\n\n"
+                ]
+            },
+            "repeats": 1,
+            "should_decontaminate": false,
+            "metadata": [
+                {
+                    "version": 0.0
+                }
+            ],
+            "lmms_eval_specific_kwargs": {
+                "default": {
+                    "pre_prompt": "",
+                    "mca_post_prompt": "Answer with the option's letter from the given choices directly.",
+                    "na_post_prompt": "Please answer the question using a single word or phrase."
+                },
+                "gemini_api": {
+                    "pre_prompt": "",
+                    "mca_post_prompt": "Answer with the option's letter from the given choices directly.",
+                    "na_post_prompt": "Do not response anything other than a single number!"
+                },
+                "gpt4v": {
+                    "pre_prompt": "",
+                    "mca_post_prompt": "Answer with the option's letter from the given choices directly.",
+                    "na_post_prompt": "Do not response anything other than a single number!"
+                },
+                "pre_prompt": "",
+                "mca_post_prompt": "Answer with the option's letter from the given choices directly.",
+                "na_post_prompt": "Please answer the question using a single word or phrase."
+            }
+        }
+    },
+    "versions": {
+        "urbanvideobench": "Yaml"
+    },
+    "n-shot": {
+        "urbanvideobench": 0
+    },
+    "higher_is_better": {
+        "urbanvideobench": {
+            "urbanvideobench_score": true
+        }
+    },
+    "n-samples": {
+        "urbanvideobench": {
+            "original": 5355,
+            "effective": 5355
+        }
+    },
+    "config": {
+        "model": "llava_onevision",
+        "model_args": "pretrained=/root/autodl-tmp/models/llava-onevision-qwen2-7b-ov,conv_template=qwen_1_5,model_name=llava_qwen,device_map=auto,dycoke=True",
+        "batch_size": "1",
+        "batch_sizes": [],
+        "device": null,
+        "use_cache": null,
+        "limit": null,
+        "bootstrap_iters": 100000,
+        "gen_kwargs": "",
+        "random_seed": 0,
+        "numpy_seed": 1234,
+        "torch_seed": 1234,
+        "fewshot_seed": 1234
+    },
+    "git_hash": "8df4296",
+    "date": "0512_1924"
+}
