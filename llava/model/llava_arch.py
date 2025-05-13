@@ -20,6 +20,7 @@ import re
 import time
 import torch
 import torch.nn as nn
+from transformers import AutoTokenizer
 from .multimodal_encoder.builder import build_vision_tower
 from .multimodal_resampler.builder import build_vision_resampler
 from .multimodal_projector.builder import build_vision_projector
@@ -249,8 +250,10 @@ class LlavaMetaForCausalLM(ABC):
         return image_feature
 
     def prepare_inputs_labels_for_multimodal(self, input_ids, position_ids, attention_mask, past_key_values, labels, images, modalities=["image"], image_sizes=None):
+        # 获取ViT
         vision_tower = self.get_vision_tower()
         # rank_print(modalities)
+        # 这里不用管
         if vision_tower is None or images is None or input_ids.shape[1] == 1:
             return input_ids, position_ids, attention_mask, past_key_values, None, labels
 
@@ -258,15 +261,20 @@ class LlavaMetaForCausalLM(ABC):
             modalities = [modalities]
 
         # import pdb; pdb.set_trace()
+        # images一般是一个长度是1的列表
+        # 列表中的元素就是所有的帧, 尺寸是(32, 3, 384, 384)
         if type(images) is list or images.ndim == 5:
+            # 这个不用看
             if type(images) is list:
                 images = [x.unsqueeze(0) if x.ndim == 3 else x for x in images]
 
+            # 存储第几个batch是video, 不用看
             video_idx_in_batch = []
             for _ in range(len(modalities)):
                 if modalities[_] == "video":
                     video_idx_in_batch.append(_)
 
+            # 现在视频就在images_list里面了, 长度是1
             images_list = []
             for image in images:
                 if image.ndim == 4:
@@ -274,13 +282,16 @@ class LlavaMetaForCausalLM(ABC):
                 else:
                     images_list.append(image.unsqueeze(0))
 
+            # concat_images就是[32, 3, 384, 384]
             concat_images = torch.cat([image for image in images_list], dim=0)
             split_sizes = [image.shape[0] for image in images_list]
+            # encoded_image_features尺寸是(32, 729, 3584)
             encoded_image_features = self.encode_images(concat_images)
             # image_features,all_faster_video_features = self.encode_multimodals(concat_images, video_idx_in_batch, split_sizes)
 
             # This is a list, each element is [num_images, patch * patch, dim]
             # rank_print(f"Concat images : {concat_images.shape}")
+            # 现在encoded_image_features是一个元组, 长度是1
             encoded_image_features = torch.split(encoded_image_features, split_sizes)
             image_features = []
             for idx, image_feat in enumerate(encoded_image_features):
@@ -291,8 +302,12 @@ class LlavaMetaForCausalLM(ABC):
             # image_features = self.encode_multimodals(concat_images, video_idx_in_batch, split_sizes)
             # rank_print(f"Encoded image feats : {[x.shape for x in image_features]}")
             # image_features = torch.split(image_features, split_sizes, dim=0)
+            # 现在image_feature是一个长度是1的列表, [32, 196, 3584]
+            # 这个值是spatial_unpad
             mm_patch_merge_type = getattr(self.config, "mm_patch_merge_type", "flat")
+            # 这个值是anyres_max_9
             image_aspect_ratio = getattr(self.config, "image_aspect_ratio", "square")
+            # 这个值是one_token
             mm_newline_position = getattr(self.config, "mm_newline_position", "one_token")
 
             if mm_patch_merge_type == "flat":
@@ -336,6 +351,18 @@ class LlavaMetaForCausalLM(ABC):
                             
                         elif mm_newline_position == "one_token":
                             # one-token
+                            # 就在这里, image_feature的帧维度消失了
+                            # 消失之前的维度是(32, 196, 3584)
+                            # ================== Add Motion Token ==================
+                            frame_num = image_feature.shape[0]
+                            motion_languages = [f"Frame:{i:02d}" for i in range(frame_num)]
+                            tokenizer_path = '/root/autodl-tmp/models/llava-onevision-qwen2-7b-ov'
+                            tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
+                            motion_input_ids = [tokenizer(motion_language, return_tensors='pt')['input_ids'].to(image_feature.device) for motion_language in motion_languages]
+                            motion_input_embeds = [self.get_model().embed_tokens(motion_input_id).squeeze(0) for motion_input_id in motion_input_ids]
+                            motion_input_embeds = torch.stack(motion_input_embeds)
+                            image_feature = torch.cat([image_feature, motion_input_embeds], dim=1)
+                            # ======================================================
                             image_feature = image_feature.flatten(0, 1)
                             if 'unpad' in mm_patch_merge_type:
                                 image_feature = torch.cat((
@@ -470,7 +497,6 @@ class LlavaMetaForCausalLM(ABC):
             cur_input_embeds_no_im = torch.split(cur_input_embeds, split_sizes, dim=0)
             cur_new_input_embeds = []
             cur_new_labels = []
-
             for i in range(num_images + 1):
                 cur_new_input_embeds.append(cur_input_embeds_no_im[i])
                 cur_new_labels.append(cur_labels_noim[i])
