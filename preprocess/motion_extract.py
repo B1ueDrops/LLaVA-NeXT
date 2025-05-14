@@ -37,47 +37,42 @@ def encode_image(image_path):
 
 
 def call_qwen(img1_base, img2_base):
-    try:
-        client = OpenAI(
-            # 若没有配置环境变量，请用阿里云百炼API Key将下行替换为：api_key="sk-xxx",
-            api_key=os.getenv("DASHSCOPE_API_KEY"),
-            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-        )
+    client = OpenAI(
+        # 若没有配置环境变量，请用阿里云百炼API Key将下行替换为：api_key="sk-xxx",
+        api_key=os.getenv("DASHSCOPE_API_KEY"),
+        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+    )
 
-        completion = client.chat.completions.create(
-            model="qwen2.5-vl-72b-instruct",  # 模型列表：https://help.aliyun.com/zh/model-studio/getting-started/models
-            messages=[
-                {
-                    'role': 'system',
-                    'content': [
-                        {"type": "text", "text": "You are a helpful assistant."}
-                    ]
-                },
-                {
-                    'role': 'user',
-                    'content': [
-                        {
-                            'type': "image_url", "image_url": {
-                                "url": f"data:image/png;base64,{img1_base}"
-                            }
-                        },
-                        {
-                            'type': "image_url", "image_url": {
-                                "url": f"data:image/png;base64,{img2_base}"
-                            }
-                        },
-                        {
-                            'type': "text", "text": prompt
-                        },
-                    ]
-                }
-            ]
-        )
-        return completion.choices[0].message.content
-    except Exception as e:
-        print(f"错误信息：{e}")
-        print("请参考文档：https://help.aliyun.com/zh/model-studio/developer-reference/error-code")
-        return None
+    completion = client.chat.completions.create(
+        model="qwen2.5-vl-72b-instruct",  # 模型列表：https://help.aliyun.com/zh/model-studio/getting-started/models
+        messages=[
+            {
+                'role': 'system',
+                'content': [
+                    {"type": "text", "text": "You are a helpful assistant."}
+                ]
+            },
+            {
+                'role': 'user',
+                'content': [
+                    {
+                        'type': "image_url", "image_url": {
+                            "url": f"data:image/png;base64,{img1_base}"
+                        }
+                    },
+                    {
+                        'type': "image_url", "image_url": {
+                            "url": f"data:image/png;base64,{img2_base}"
+                        }
+                    },
+                    {
+                        'type': "text", "text": prompt
+                    },
+                ]
+            }
+        ]
+    )
+    return completion.choices[0].message.content
 
 if __name__ == '__main__':
     dataset_path = '/root/LLaVA-NeXT/preprocess/vsi_bench_tmp.json'
@@ -91,7 +86,7 @@ if __name__ == '__main__':
             video_info = video_infos[k]
             motion_list = []
             video_id = video_info['video_id']
-            if video_id in duplicate_dict:
+            if video_id in duplicate_dict and None not in duplicate_dict[video_id]:
                 video_infos[k]['motion_list'] = duplicate_dict[video_id]
                 continue
             if 'urbanvideo' in dataset_path:
@@ -126,6 +121,8 @@ if __name__ == '__main__':
                         os.remove(img2_path)
                     else:
                         print("img1不存在")
+                    with open('/root/LLaVA-NeXT/preprocess/vsi_duplicate.json', 'w') as fff:
+                        json.dump(duplicate_dict, fff, indent=4)
                     continue
                 motion_list.append(diff)
                 img1_path = f"/root/autodl-tmp/tmp/{question_id}_frame_{idx1}.png"
