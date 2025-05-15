@@ -376,6 +376,7 @@ class Llava_OneVision(lmms):
         return new_list
 
     def load_video(self, video_path, max_frames_num):
+        max_frames_num = 64
         if type(video_path) == str:
             vr = VideoReader(video_path, ctx=cpu(0))
             video_file_name = os.path.basename(video_path)
@@ -383,6 +384,24 @@ class Llava_OneVision(lmms):
             vr = VideoReader(video_path[0], ctx=cpu(0))
             video_file_name = os.path.basename(video_path[0])
         total_frame_num = len(vr)
+        # # ============== CLIP Sort ===============
+        # target_video_info = None
+        # with open('/root/LLaVA-NeXT/preprocess/vsi_bench_motion.json') as f:
+        #     video_infos = json.load(f)
+        #     for video_info in video_infos:
+        #         if video_info['video_id'] == video_file_name:
+        #             target_video_info = video_info
+        #             break
+        # # ========================================
+        # if target_video_info is not None:
+        #     clip_scores = np.array(target_video_info['scores'])
+        #     idx = np.argsort(-clip_scores)
+        #     if len(idx) > 64:
+        #         idx = idx[0:64]
+        #     idx = np.sort(idx)
+        #     frame_idx = np.array([target_video_info['frames'][i] for i in idx])
+        #     breakpoint()
+        # else:
         uniform_sampled_frames = np.linspace(0, total_frame_num - 1, max_frames_num, dtype=int)
         frame_idx = uniform_sampled_frames.tolist()
         sparse_frames = vr.get_batch(frame_idx).asnumpy()

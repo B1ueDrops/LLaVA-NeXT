@@ -354,14 +354,14 @@ class LlavaMetaForCausalLM(ABC):
                             # 就在这里, image_feature的帧维度消失了
                             # 消失之前的维度是(32, 196, 3584)
                             # ================== Add Motion Token ==================
-                            frame_num = image_feature.shape[0]
-                            motion_languages = [f"Frame:{i:02d}" for i in range(frame_num)]
-                            tokenizer_path = '/root/autodl-tmp/models/llava-onevision-qwen2-7b-ov'
-                            tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
-                            motion_input_ids = [tokenizer(motion_language, return_tensors='pt')['input_ids'].to(image_feature.device) for motion_language in motion_languages]
-                            motion_input_embeds = [self.get_model().embed_tokens(motion_input_id).squeeze(0) for motion_input_id in motion_input_ids]
-                            motion_input_embeds = torch.stack(motion_input_embeds)
-                            image_feature = torch.cat([image_feature, motion_input_embeds], dim=1)
+                            # frame_num = image_feature.shape[0]
+                            # motion_languages = [f"Frame:{i:02d}" for i in range(frame_num)]
+                            # tokenizer_path = '/root/autodl-tmp/models/llava-onevision-qwen2-7b-ov'
+                            # tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
+                            # motion_input_ids = [tokenizer(motion_language, return_tensors='pt')['input_ids'].to(image_feature.device) for motion_language in motion_languages]
+                            # motion_input_embeds = [self.get_model().embed_tokens(motion_input_id).squeeze(0) for motion_input_id in motion_input_ids]
+                            # motion_input_embeds = torch.stack(motion_input_embeds)
+                            # image_feature = torch.cat([image_feature, motion_input_embeds], dim=1)
                             # ======================================================
                             image_feature = image_feature.flatten(0, 1)
                             if 'unpad' in mm_patch_merge_type:
