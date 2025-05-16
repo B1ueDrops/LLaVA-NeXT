@@ -385,13 +385,18 @@ class Llava_OneVision(lmms):
             video_file_name = os.path.basename(video_path[0])
         total_frame_num = len(vr)
         # # ============== CLIP Sort ===============
-        # target_video_info = None
-        # with open('/root/LLaVA-NeXT/preprocess/vsi_bench_motion.json') as f:
-        #     video_infos = json.load(f)
-        #     for video_info in video_infos:
-        #         if video_info['video_id'] == video_file_name:
-        #             target_video_info = video_info
-        #             break
+        target_video_info = None
+        if not os.path.exists('/root/LLaVA-NeXT/preprocess/vsi_bench_aks_64.json'):
+            uniform_sampled_frames = np.linspace(0, total_frame_num - 1, max_frames_num, dtype=int)
+            frame_idx = uniform_sampled_frames.tolist()
+            sparse_frames = vr.get_batch(frame_idx).asnumpy()
+            return sparse_frames  # (frames, height, width, channels)
+        with open('/root/LLaVA-NeXT/preprocess/vsi_bench_aks_64.json') as f:
+            video_infos = json.load(f)
+            for video_info in video_infos:
+                if video_info['video_id'] == video_file_name:
+                    target_video_info = video_info
+                    break
         # # ========================================
         # if target_video_info is not None:
         #     clip_scores = np.array(target_video_info['scores'])
@@ -402,10 +407,17 @@ class Llava_OneVision(lmms):
         #     frame_idx = np.array([target_video_info['frames'][i] for i in idx])
         #     breakpoint()
         # else:
-        uniform_sampled_frames = np.linspace(0, total_frame_num - 1, max_frames_num, dtype=int)
-        frame_idx = uniform_sampled_frames.tolist()
-        sparse_frames = vr.get_batch(frame_idx).asnumpy()
-        return sparse_frames  # (frames, height, width, channels)
+        if target_video_info is None:
+            uniform_sampled_frames = np.linspace(0, total_frame_num - 1, max_frames_num, dtype=int)
+            frame_idx = uniform_sampled_frames.tolist()
+            sparse_frames = vr.get_batch(frame_idx).asnumpy()
+            return sparse_frames  # (frames, height, width, channels)
+        else:
+            uniform_sampled_frames = np.array(target_video_info['aks_res'])
+            frame_idx = uniform_sampled_frames.tolist()
+            sparse_frames = vr.get_batch(frame_idx).asnumpy()
+            return sparse_frames  # (frames, height, width, channels)
+
 
     def generate_until(self, requests: List[Instance]) -> List[str]:
         res = []
