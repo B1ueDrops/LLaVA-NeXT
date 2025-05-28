@@ -122,6 +122,18 @@ class LlavaQwenForCausalLM(Qwen2ForCausalLM, LlavaMetaForCausalLM):
         modalities: Optional[List[str]] = ["image"],
         **kwargs,
     ) -> Union[GenerateOutput, torch.LongTensor]:
+        if 'homo_type' in kwargs:
+            homo_type = kwargs['homo_type']
+        else:
+            homo_type = 2
+        if 'task_nam' in kwargs:
+            task_nam = kwargs['task_nam']
+        else:
+            task_nam = 'haha'
+        if 'enable_er' in kwargs:
+            enable_er = kwargs['enable_er']
+        else:
+            enable_er = False
         position_ids = kwargs.pop("position_ids", None)
         attention_mask = kwargs.pop("attention_mask", None)
         if "inputs_embeds" in kwargs:
@@ -130,10 +142,14 @@ class LlavaQwenForCausalLM(Qwen2ForCausalLM, LlavaMetaForCausalLM):
         if images is not None:
             # inputs是文本prompt的token ids
             # images是(frames, channels, 384, 384)
-            (inputs, position_ids, attention_mask, _, inputs_embeds, _) = self.prepare_inputs_labels_for_multimodal(inputs, position_ids, attention_mask, None, None, images, modalities, image_sizes=image_sizes)
+            (inputs, position_ids, attention_mask, _, inputs_embeds, _) = self.prepare_inputs_labels_for_multimodal(inputs, position_ids, attention_mask, None, None, images, modalities, image_sizes=image_sizes, homo_type=homo_type, task_nam=task_nam, enable_er=enable_er)
         else:
             inputs_embeds = self.get_model().embed_tokens(inputs)
 
+        # if homo_type is not None:
+        #     kwargs.pop('homo_type', 0)
+        # if task_nam is not None:
+        #     kwargs.pop('task_nam', 'haha')
         return super().generate(position_ids=position_ids, attention_mask=attention_mask, inputs_embeds=inputs_embeds, **kwargs)
 
 

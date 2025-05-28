@@ -1,58 +1,46 @@
 #! /bin/bash
-# rm -rf /root/autodl-tmp/VSI-Bench/vsi-bench
-# export MODEL_PATH='/root/autodl-tmp/models/llava-onevision-qwen2-0.5b-ov'
-# accelerate launch --num_processes=8 --main_process_port 12399 -m lmms_eval \
-#     --model=llava_onevision \
-#     --model_args=pretrained=${MODEL_PATH},conv_template=qwen_1_5,device_map=auto,model_name=llava_qwen \
-#     --tasks=vsibench \
-#     --batch_size=1 \
-#     --log_samples \
-#     --log_samples_suffix llava_onevision \
-#     --output_path ./aks_logs_05b/
-
-
-
-# rm -rf /root/autodl-tmp/VSI-Bench/vsi-bench
-# export MODEL_PATH='/root/autodl-tmp/models/llava-onevision-qwen2-0.5b-ov'
-# accelerate launch --num_processes=8 --main_process_port 12399 -m lmms_eval \
-#     --model=llava_onevision \
-#     --model_args=pretrained=${MODEL_PATH},conv_template=qwen_1_5,device_map=auto,model_name=llava_qwen \
-#     --tasks=vsibench \
-#     --batch_size=1 \
-#     --log_samples \
-#     --log_samples_suffix llava_onevision \
-#     --output_path ./vsi_onetoken_1fps_05b_logs/
-
-# rm -rf /root/autodl-tmp/VSI-Bench/vsi-bench
-# export MODEL_PATH='/root/autodl-tmp/models/llava-onevision-qwen2-0.5b-ov'
-# accelerate launch --num_processes=8 --main_process_port 12399 -m lmms_eval \
-#     --model=llava_onevision \
-#     --model_args=pretrained=${MODEL_PATH},conv_template=qwen_1_5,device_map=auto,model_name=llava_qwen \
-#     --tasks=vsibench \
-#     --batch_size=1 \
-#     --log_samples \
-#     --log_samples_suffix llava_onevision \
-#     --output_path ./vsi_embodiedr_64f_05b_logs/
 
 rm -rf /root/autodl-tmp/VSI-Bench/vsi-bench
 export MODEL_PATH='/root/autodl-tmp/models/llava-onevision-qwen2-7b-ov'
 accelerate launch --num_processes=8 --main_process_port 12399 -m lmms_eval \
     --model=llava_onevision \
-    --model_args=pretrained=${MODEL_PATH},conv_template=qwen_1_5,device_map=auto,model_name=llava_qwen \
+    --model_args=pretrained=${MODEL_PATH},conv_template=qwen_1_5,device_map=auto,model_name=llava_qwen,enable_er=True,homo_type=2,task_nam=vsi \
     --tasks=vsibench \
     --batch_size=1 \
     --log_samples \
     --log_samples_suffix llava_onevision \
-    --output_path ./exp_vsi_embodiedr_1fps_7b_logs/
+    --output_path ./exp_res/exp_vsi_ours_logs/
 
-# rm -rf /root/autodl-tmp/VSI-Bench/vsi-bench
-# rm /root/LLaVA-NeXT/vsi_bench_aks_64.json
-# export MODEL_PATH='/root/autodl-tmp/models/llava-onevision-qwen2-7b-ov'
-# accelerate launch --num_processes=8 --main_process_port 12399 -m lmms_eval \
-#     --model=llava_onevision \
-#     --model_args=pretrained=${MODEL_PATH},conv_template=qwen_1_5,device_map=auto,model_name=llava_qwen \
-#     --tasks=vsibench \
-#     --batch_size=1 \
-#     --log_samples \
-#     --log_samples_suffix llava_onevision \
-#     --output_path ./vsi_uniform_64_7b_logs/
+rm -rf /root/autodl-tmp/VSI-Bench/vsi-bench
+export MODEL_PATH='/root/autodl-tmp/models/llava-onevision-qwen2-7b-ov'
+accelerate launch --num_processes=8 --main_process_port 12399 -m lmms_eval \
+    --model=llava_onevision \
+    --model_args=pretrained=${MODEL_PATH},conv_template=qwen_1_5,device_map=auto,model_name=llava_qwen,enable_er=True,homo_type=0,task_nam=vsi \
+    --tasks=vsibench \
+    --batch_size=1 \
+    --log_samples \
+    --log_samples_suffix llava_onevision \
+    --output_path ./exp_res/exp_vsi_er_logs/
+
+
+rm -rf /root/autodl-tmp/VSI-Bench/vsi-bench
+export MODEL_PATH='/root/autodl-tmp/models/llava-onevision-qwen2-7b-ov'
+accelerate launch --num_processes=8 --main_process_port 12399 -m lmms_eval \
+    --model=llava_onevision \
+    --model_args=pretrained=${MODEL_PATH},conv_template=qwen_1_5,device_map=auto,model_name=llava_qwen,enable_er=False,homo_type=1,task_nam=vsi \
+    --tasks=vsibench \
+    --batch_size=1 \
+    --log_samples \
+    --log_samples_suffix llava_onevision \
+    --output_path ./exp_res/exp_vsi_static_logs/
+
+rm -rf /root/autodl-tmp/VSI-Bench/vsi-bench
+export MODEL_PATH='/root/autodl-tmp/models/llava-onevision-qwen2-7b-ov'
+accelerate launch --num_processes=8 --main_process_port 12399 -m lmms_eval \
+    --model=llava_onevision \
+    --model_args=pretrained=${MODEL_PATH},conv_template=qwen_1_5,device_map=auto,model_name=llava_qwen,enable_er=False,homo_type=0,task_nam=vsi \
+    --tasks=vsibench \
+    --batch_size=1 \
+    --log_samples \
+    --log_samples_suffix llava_onevision \
+    --output_path ./exp_res/exp_vsi_full_logs/

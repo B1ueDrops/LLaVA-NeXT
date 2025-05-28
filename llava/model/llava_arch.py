@@ -36,6 +36,7 @@ import numpy as np
 from PIL import Image
 import matplotlib.pyplot as plt
 import torch.nn.functional as F
+from deepspeed.profiling.flops_profiler import FlopsProfiler
 
 def compute_homography_between_frames(frame1: np.ndarray, frame2: np.ndarray) -> np.ndarray:
     """
@@ -288,7 +289,7 @@ class LlavaMetaForCausalLM(ABC):
         image_feature = image_feature.permute(1, 2, 0).contiguous()
         return image_feature
 
-    def prepare_inputs_labels_for_multimodal(self, input_ids, position_ids, attention_mask, past_key_values, labels, images, modalities=["image"], image_sizes=None):
+    def prepare_inputs_labels_for_multimodal(self, input_ids, position_ids, attention_mask, past_key_values, labels, images, modalities=["image"], image_sizes=None, homo_type=0, task_nam='urban', enable_er=False):
         # 获取ViT
         vision_tower = self.get_vision_tower()
         # rank_print(modalities)
@@ -543,7 +544,7 @@ class LlavaMetaForCausalLM(ABC):
                         elif mm_newline_position == "one_token":
                             # one-token
                             # 就在这里, image_feature的帧维度消失了
-                            enable_H = False
+                            enable_H = (homo_type != 0)
                             N, token_num, _ = image_feature.shape
                             if enable_H:
                                 token_list = []
@@ -561,7 +562,10 @@ class LlavaMetaForCausalLM(ABC):
                                             warp_frame_token = warp_frame_tokens[j]
                                             prev_frame_token = prev_frame_tokens[j]
                                             # 这一行用static
-                                            cos_sim = F.cosine_similarity(cur_frame_token.unsqueeze(0), warp_frame_token.unsqueeze(0), dim=1)  # 输出 shape [1]
+                                            if homo_type == 1:
+                                                cos_sim = F.cosine_similarity(cur_frame_token.unsqueeze(0), prev_frame_token.unsqueeze(0), dim=1)  # 输出 shape [1]
+                                            elif homo_type == 2:
+                                                cos_sim = F.cosine_similarity(cur_frame_token.unsqueeze(0), warp_frame_token.unsqueeze(0), dim=1)  # 输出 shape [1]
                                             # 这一行用Homo
                                             # cos_sim = F.cosine_similarity(cur_frame_token.unsqueeze(0), warp_frame_token.unsqueeze(0), dim=1)  # 输出 shape [1]
                                             cos_sim_value = cos_sim.item()  # 取数值
@@ -576,8 +580,8 @@ class LlavaMetaForCausalLM(ABC):
                             else:
                                 image_feature = image_feature.flatten(0, 1)
                             # print(f'Compression Ratio: {image_feature.shape[0] / (N * token_num)}')
-                            # with open('/root/LLaVA-NeXT/vsi_phase2.txt', 'a') as f:
-                            #     f.write(f'Compression Ratio: {image_feature.shape[0] / (N * token_num)}\n')
+                            with open(f'/root/LLaVA-NeXT/exp_res/{task_nam}_homo{homo_type}.txt', 'a') as f:
+                                f.write(f'Compression Ratio: {image_feature.shape[0] / (N * token_num)}\n')
                             # image_feature = image_feature[0:5000]
                             # ===============================================
                             #image_feature = image_feature.flatten(0, 1)

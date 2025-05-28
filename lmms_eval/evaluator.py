@@ -259,6 +259,7 @@ def simple_evaluate(
         fewshot_as_multiturn=fewshot_as_multiturn,
         verbosity=verbosity,
         cli_args=cli_args,
+        model_args=model_args,
     )
 
     if lm.rank == 0:
@@ -320,6 +321,7 @@ def evaluate(
     fewshot_as_multiturn: bool = False,
     verbosity: str = "INFO",
     cli_args=None,
+    model_args=None
 ):
     """Instantiate and evaluate a model on a list of tasks.
 
@@ -344,7 +346,14 @@ def evaluate(
     :return
         Dictionary of results
     """
-
+    parsed_dict = dict(item.split('=') for item in model_args.split(','))
+    enable_er = parsed_dict['enable_er']
+    if enable_er == 'False':
+        enable_er = False
+    elif enable_er == 'True':
+        enable_er = True
+    homo_type = int(parsed_dict['homo_type'])
+    task_nam = parsed_dict['task_nam']
     # stores the final result for each task, for each metric/filter pair.
     results = collections.defaultdict(dict)
     # Tracks each task's version.
@@ -455,7 +464,7 @@ def evaluate(
                 cloned_reqs.extend([req] * req.repeats)
 
         # run requests through model
-        resps = getattr(lm, reqtype)(cloned_reqs)  # Choiszt run generate until
+        resps = getattr(lm, reqtype)(cloned_reqs, enable_er, homo_type, task_nam)  # Choiszt run generate until
 
         # put responses from model into a list of length K for each request.
         for x, req in zip(resps, cloned_reqs):

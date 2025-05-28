@@ -9,3 +9,5 @@
 - generate函数实现在: `llava/model/language_model/llava_qwen.py`:117
 - prepare_inputs_labels_for_multimodal在llava/model/llava_arch.py:251
 - 最终图片
+- /root/miniconda3/envs/dycoke1/lib/python3.10/site-packages/transformers/generation/utils.py:2289
+    - 有prefill, decode

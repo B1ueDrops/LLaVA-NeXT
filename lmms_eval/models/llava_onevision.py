@@ -27,6 +27,7 @@ from lmms_eval.api.instance import Instance
 from lmms_eval.api.model import lmms
 from lmms_eval.api.registry import register_model
 from lmms_eval.models.model_utils.load_video import read_video_pyav
+from deepspeed.profiling.flops_profiler import FlopsProfiler
 
 def extract_keyframes(frames, x):
     """
@@ -337,7 +338,7 @@ class Llava_OneVision(lmms):
         use_cache: Optional[bool] = True,
         truncate_context: Optional[bool] = False,  # whether to truncate the context in generation, set it False for LLaVA-1.6
         customized_config: Optional[str] = None,  # ends in json
-        max_frames_num: Optional[int] = 100,
+        max_frames_num: Optional[int] = 90,
         mm_spatial_pool_stride: Optional[int] = 2,
         mm_spatial_pool_mode: Optional[str] = "bilinear",
         token_strategy: Optional[str] = "single",  # could be "single" or "multiple", "multiple" denotes adding multiple <image> tokens for each frame
@@ -346,7 +347,8 @@ class Llava_OneVision(lmms):
     ) -> None:
         super().__init__()
         # Do not use kwargs for now
-        assert kwargs == {}, f"Unexpected kwargs: {kwargs}"
+        # assert kwargs == {}, f"Unexpected kwargs: {kwargs}"
+        self.kwargs = kwargs
 
         accelerator_kwargs = InitProcessGroupKwargs(timeout=timedelta(weeks=52))
         accelerator = Accelerator(kwargs_handlers=[accelerator_kwargs])
@@ -552,7 +554,7 @@ class Llava_OneVision(lmms):
                     image_tensor = []
                     try:
                         if self.video_decode_backend == "decord":
-                            frames = self.load_video(visual,  self.max_frames_num)
+                            frames = self.load_video(visual)
                         elif self.video_decode_backend == "pyav":
                             frames = read_video_pyav(visual[0], num_frm=self.max_frames_num)
                         frames = self._image_processor.preprocess(frames, return_tensors="pt")["pixel_values"].half().cuda()
@@ -630,7 +632,7 @@ class Llava_OneVision(lmms):
                     new_list.append(j)
         return new_list
 
-    def load_video(self, video_path, max_frames_num=100):
+    def load_video(self, video_path, enable_er=True, max_frames_num=90, homo_type=0, task_nam='vsi'):
         if isinstance(video_path, str):
             vr = VideoReader(video_path, ctx=cpu(0))
             video_file_name = os.path.basename(video_path)
@@ -641,20 +643,24 @@ class Llava_OneVision(lmms):
         video_fps = vr.get_avg_fps()
         total_frame_num = len(vr)
         video_duration = total_frame_num / video_fps
-        max_frames_num = 95
         # 按 1 fps 采样
         frame_times = np.arange(0, min(int(video_duration), max_frames_num))
         frame_idx = (frame_times * video_fps).astype(int)
         frame_idx = np.clip(frame_idx, 0, total_frame_num - 1)
-
         sparse_frames = vr.get_batch(frame_idx).asnumpy()
-        N = sparse_frames.shape[0]
-        sparse_frames_list = [sparse_frames[i] for i in range(sparse_frames.shape[0])]
-        keyframe_idx = extract_keyframes(sparse_frames_list, 0.5)
-        sparse_frames = [sparse_frames_list[k] for k in keyframe_idx]
-        sparse_frames = np.stack(sparse_frames, axis=0)
-        with open('/root/LLaVA-NeXT/vsi_embodiedr.txt', 'a') as f:
-            f.write(f'Compression Ratio: {sparse_frames.shape[0] / N}\n')
+
+        if enable_er:
+            N = sparse_frames.shape[0]
+            sparse_frames_list = [sparse_frames[i] for i in range(sparse_frames.shape[0])]
+            keyframe_idx = extract_keyframes(sparse_frames_list, 0.5)
+            sparse_frames = [sparse_frames_list[k] for k in keyframe_idx]
+            sparse_frames = np.stack(sparse_frames, axis=0)
+            if homo_type == 0:
+                with open(f'/root/LLaVA-NeXT/exp_res/{task_nam}_er_without_ours.txt', 'a') as f:
+                    f.write(f'Compression Ratio: {sparse_frames.shape[0] / N}\n')
+            elif homo_type == 2:
+                with open(f'/root/LLaVA-NeXT/exp_res/{task_nam}_er_with_ours.txt', 'a') as f:
+                    f.write(f'Compression Ratio: {sparse_frames.shape[0] / N}\n')
         return sparse_frames
 
         # if not os.path.exists('/root/LLaVA-NeXT/preprocess/vsi_bench_aks_64.json'):
@@ -696,7 +702,7 @@ class Llava_OneVision(lmms):
         #     return sparse_frames  # (frames, height, width, channels)
 
 
-    def generate_until(self, requests: List[Instance]) -> List[str]:
+    def generate_until(self, requests: List[Instance], enable_er=False, homo_type=0, task_nam='vsi') -> List[str]:
         res = []
 
         def _collate(x):
@@ -779,7 +785,7 @@ class Llava_OneVision(lmms):
                         image_tensor = []
                         try:
                             if self.video_decode_backend == "decord":
-                                frames = self.load_video(visual, self.max_frames_num)
+                                frames = self.load_video(visual, enable_er, self.max_frames_num, homo_type, task_nam)
                             elif self.video_decode_backend == "pyav":
                                 frames = read_video_pyav(visual[0], num_frm=self.max_frames_num)
                             frames = self._image_processor.preprocess(frames, return_tensors="pt")["pixel_values"].half().cuda()
@@ -866,8 +872,28 @@ class Llava_OneVision(lmms):
                 gen_kwargs.pop("image_aspect_ratio")
             try:
                 # This is inference entry point
+                # need counting FLOPS
                 with torch.inference_mode():
-                    cont = self.model.generate(input_ids, attention_mask=attention_masks, pad_token_id=pad_token_ids, images=image_tensor, use_cache=self.use_cache, **gen_kwargs)
+                    prof = FlopsProfiler(self.model)
+                    prof.start_profile()
+                    cont = self.model.generate(input_ids, attention_mask=attention_masks, pad_token_id=pad_token_ids, images=image_tensor, use_cache=self.use_cache, homo_type=homo_type, task_nam=task_nam, enable_er=enable_er, **gen_kwargs)
+                    prof.stop_profile()
+                    flops = prof.get_total_flops()
+                    duration = prof.get_total_duration()
+                    breakpoint()
+
+                    if enable_er and homo_type == 2:
+                        with open(f'/root/LLaVA-NeXT/exp_res/{task_nam}_ours_with_er_flops.txt', 'a') as f:
+                            f.write(f'flops: {flops}\n')
+                    elif enable_er and homo_type == 0:
+                        with open(f'/root/LLaVA-NeXT/exp_res/{task_nam}_er_without_ours_flops.txt', 'a') as f:
+                            f.write(f'flops: {flops}\n')
+                    elif homo_type == 1:
+                        with open(f'/root/LLaVA-NeXT/exp_res/{task_nam}_static_flops.txt', 'a') as f:
+                            f.write(f'flops: {flops}\n')
+                    elif enable_er == False and homo_type == 0:
+                        with open(f'/root/LLaVA-NeXT/exp_res/{task_nam}_full_flops.txt', 'a') as f:
+                            f.write(f'flops: {flops}\n')
                     # cont = self.model.generate(qwen_input_ids, pad_token_id=pad_token_ids, images=image_tensor, use_cache=self.use_cache, **gen_kwargs)
 
                 text_outputs = self.tokenizer.batch_decode(cont, skip_special_tokens=True)
@@ -991,7 +1017,7 @@ class Llava_OneVision(lmms):
                             image_tensor = []
                             try:
                                 if self.video_decode_backend == "decord":
-                                    frames = self.load_video(visual, self.max_frames_num)
+                                    frames = self.load_video(visual)
                                 elif self.video_decode_backend == "pyav":
                                     frames = read_video_pyav(visual[0], num_frm=self.max_frames_num)
                                 frames = self._image_processor.preprocess(frames, return_tensors="pt")["pixel_values"].half().cuda()
