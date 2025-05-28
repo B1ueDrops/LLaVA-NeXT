@@ -169,8 +169,12 @@ class SigLipVisionEmbeddings(nn.Module):
     def forward(self, pixel_values: torch.FloatTensor) -> torch.Tensor:
         patch_embeds = self.patch_embedding(pixel_values)  # shape = [*, width, grid, grid]
         embeddings = patch_embeds.flatten(2).transpose(1, 2)
-
-        embeddings = embeddings + self.position_embedding(self.position_ids)
+        position_embedding_si = self.position_embedding(self.position_ids)
+        num_frame_positions = torch.arange(pixel_values.shape[0]).to(position_embedding_si.device)
+        position_embedding_f = self.position_embedding(num_frame_positions)
+        position_embedding_f = position_embedding_f.unsqueeze(1).expand(-1, embeddings.shape[1], -1)
+        embeddings = embeddings + position_embedding_si
+        embeddings = embeddings + position_embedding_f
         return embeddings
 
 
@@ -430,9 +434,9 @@ class SigLipVisionTransformer(nn.Module):
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
-
+        # pixel_values就是(2, 3, 384, 384)
         hidden_states = self.embeddings(pixel_values)
-
+        # hidden_states是(2, 729, 1152)
         encoder_outputs = self.encoder(
             inputs_embeds=hidden_states,
             output_attentions=output_attentions,

@@ -30,7 +30,46 @@ from llava.constants import IGNORE_INDEX, IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_PATCH
 from llava.mm_utils import get_anyres_image_grid_shape
 from llava.utils import rank0_print, rank_print
 import random
+import av
+import cv2
+import numpy as np
+from PIL import Image
+import matplotlib.pyplot as plt
+import torch.nn.functional as F
 
+def compute_homography_between_frames(frame1: np.ndarray, frame2: np.ndarray) -> np.ndarray:
+    """
+    输入两帧图像，计算从 frame1 到 frame2 的 Homography 矩阵
+    """
+    gray1 = cv2.cvtColor(frame1, cv2.COLOR_RGB2GRAY) if frame1.ndim == 3 else frame1
+    gray2 = cv2.cvtColor(frame2, cv2.COLOR_RGB2GRAY) if frame2.ndim == 3 else frame2
+    detector = cv2.ORB_create(5000)
+    kp1, des1 = detector.detectAndCompute(gray1, None)
+    kp2, des2 = detector.detectAndCompute(gray2, None)
+    if des1 is None or des2 is None:
+        return None
+    if len(des1) < 2 or len(des2) < 2:
+        return None
+    index_params = dict(algorithm=6,  # FLANN_INDEX_LSH
+                        table_number=6,
+                        key_size=12,
+                        multi_probe_level=1)
+    search_params = dict(checks=50)
+    flann = cv2.FlannBasedMatcher(index_params, search_params)
+    matches = flann.knnMatch(des1, des2, k=2)
+    good_matches = []
+    for pair in matches:
+        if len(pair) < 2:
+            continue
+        m, n = pair
+        if m.distance < 0.75 * n.distance:
+            good_matches.append(m)
+    if len(good_matches) < 4:
+        return None
+    src_pts = np.float32([kp1[m.queryIdx].pt for m in good_matches]).reshape(-1, 1, 2)
+    dst_pts = np.float32([kp2[m.trainIdx].pt for m in good_matches]).reshape(-1, 1, 2)
+    H, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
+    return H
 
 class LlavaMetaModel:
 
@@ -283,22 +322,173 @@ class LlavaMetaForCausalLM(ABC):
                     images_list.append(image.unsqueeze(0))
 
             # concat_images就是[32, 3, 384, 384]
+
             concat_images = torch.cat([image for image in images_list], dim=0)
+            # ============== Homography Transformation here =================
+            warped_image_list = []
+            for i in range(concat_images.shape[0]):
+                if i == 0:
+                    warped_image_list.append(concat_images[0])
+                    continue
+                pre_frame = concat_images[i - 1].permute(1, 2, 0).cpu()
+                pre_frame = (pre_frame + 1) / 2
+                pre_frame = (pre_frame * 255).clamp(0, 255)
+                pre_frame = pre_frame.to(torch.uint8).numpy()
+                next_frame = concat_images[i].permute(1, 2, 0).cpu()
+                next_frame = (next_frame + 1) / 2
+                next_frame = (next_frame * 255).clamp(0, 255)
+                next_frame = next_frame.to(torch.uint8).numpy()
+                H = compute_homography_between_frames(pre_frame, next_frame)
+                if H is None:
+                    # next_frame恢复
+                    next_frame = torch.from_numpy(next_frame).to(self.device).to(torch.float16)
+                    next_frame = next_frame.permute(2, 0, 1)
+                    next_frame = (next_frame / 255.0) * 2 - 1
+                    warped_image_list.append(next_frame)
+                    continue
+                h, w = pre_frame.shape[:2]
+                warped_frame = cv2.warpPerspective(pre_frame, H, (w, h))
+                warped_frame = torch.from_numpy(warped_frame).to(self.device).to(torch.float16)
+                warped_frame = warped_frame.permute(2, 0, 1)
+                warped_frame = (warped_frame / 255.0) * 2 - 1
+                warped_image_list.append(warped_frame)
+            # ============================================================
+            warped_concat_images = torch.stack(warped_image_list, dim=0)
             split_sizes = [image.shape[0] for image in images_list]
             # encoded_image_features尺寸是(32, 729, 3584)
             encoded_image_features = self.encode_images(concat_images)
+            warped_encoded_image_features = self.encode_images(warped_concat_images)
+            # ========================================================
             # image_features,all_faster_video_features = self.encode_multimodals(concat_images, video_idx_in_batch, split_sizes)
 
             # This is a list, each element is [num_images, patch * patch, dim]
             # rank_print(f"Concat images : {concat_images.shape}")
             # 现在encoded_image_features是一个元组, 长度是1
             encoded_image_features = torch.split(encoded_image_features, split_sizes)
+            warped_encoded_image_features = torch.split(warped_encoded_image_features, split_sizes)
             image_features = []
+            warped_image_features = []
             for idx, image_feat in enumerate(encoded_image_features):
                 if idx in video_idx_in_batch:
                     image_features.append(self.get_2dPool(image_feat))
                 else:
                     image_features.append(image_feat)
+            for idx, image_feat in enumerate(warped_encoded_image_features):
+                if idx in video_idx_in_batch:
+                    warped_image_features.append(self.get_2dPool(image_feat))
+                else:
+                    warped_image_features.append(image_feat)
+            # 可视化cosine similarity
+            import os
+            import numpy as np
+            import matplotlib.pyplot as plt
+            from tqdm import tqdm
+
+            def compute_cosine_similarity(a, b):
+                # a, b: [token_num, embedding_dim]
+                a_norm = a / (a.norm(dim=-1, keepdim=True) + 1e-8)
+                b_norm = b / (b.norm(dim=-1, keepdim=True) + 1e-8)
+                cos_sim = (a_norm * b_norm).sum(dim=-1)  # [token_num]
+                return cos_sim.cpu().numpy()
+            def demo_visualize(embeddings, save_dir="super_visualize_output"):
+                """
+                embeddings: torch.Tensor of shape [5, 196, 896]
+                """
+                os.makedirs(save_dir, exist_ok=True)
+
+                num_frames, num_tokens, _ = embeddings.shape
+                grid_size = int(np.sqrt(num_tokens))
+                assert grid_size * grid_size == num_tokens, "Token count must be a perfect square (e.g., 196 → 14x14)"
+
+                for i in range(0, num_frames, 2):
+                    cos_sim = compute_cosine_similarity(
+                        embeddings[i], embeddings[i + 1]
+                    )  # [196]
+
+                    cos_sim = cos_sim > 0.65
+                    cos_sim_grid = cos_sim.reshape(grid_size, grid_size)
+
+                    plt.figure(figsize=(6, 6))
+                    plt.imshow(cos_sim_grid, cmap='viridis', vmin=0, vmax=1)
+                    plt.axis('off')
+                    # plt.xlabel("Grid X")
+                    # plt.ylabel("Grid Y")
+                    save_path = os.path.join(save_dir, f"frame_{i-1}_vs_{i}.png")
+                    plt.savefig(save_path, bbox_inches='tight', pad_inches=0, dpi=500)
+                    plt.close()
+                    print(f"✅ Saved: {save_path}")
+            def visualize_frame_cosine_heatmap(concat_images, warped_concat_images, image_features, warped_image_features, save_dir="warp_cosine_heatmaps"):
+                """
+                concat_images, warped_concat_images: [N, 3, 384, 384], float16, [-1, 1]
+                image_features, warped_image_features: [N, token_num, embedding_dim]
+                """
+                N, token_num, _ = image_features.shape
+                grid_size = int(math.sqrt(token_num))
+                assert grid_size * grid_size == token_num, "Token number must be a perfect square"
+
+                os.makedirs(save_dir, exist_ok=True)
+
+                for i in tqdm(range(1, N)):
+                    cos_sim1 = compute_cosine_similarity(
+                        image_features[i - 1],
+                        image_features[i]
+                    )
+                    cos_sim_grid1 = cos_sim1.reshape(grid_size, grid_size)
+
+                    cos_sim2 = compute_cosine_similarity(
+                        warped_image_features[i],
+                        image_features[i]
+                    )
+                    cos_sim_grid2 = cos_sim2.reshape(grid_size, grid_size)
+                    cos_sim_grid1 = cos_sim_grid1 > 0.8
+                    cos_sim_grid2 = cos_sim_grid2 > 0.8
+                    # 准备图片（float16 [-1,1] → uint8 [0,255]）
+                    img1 = ((concat_images[i].permute(1, 2, 0).cpu().float() + 1) / 2 * 255).clamp(0, 255).to(torch.uint8).numpy()
+                    img2 = ((warped_concat_images[i].permute(1, 2, 0).cpu().float() + 1) / 2 * 255).clamp(0, 255).to(torch.uint8).numpy()
+
+                    # 绘制 2x2 子图（第一行是图片，第二行是 heatmap）
+                    fig, axs = plt.subplots(2, 2, figsize=(12, 12))
+
+                    # 第一行：图片
+                    axs[0, 0].imshow(img1)
+                    axs[0, 0].set_title(f"Original Image {i}")
+                    axs[0, 0].axis('off')
+
+                    axs[0, 1].imshow(img2)
+                    axs[0, 1].set_title(f"Warped Image {i}")
+                    axs[0, 1].axis('off')
+
+                    # 第二行：heatmap
+                    im1 = axs[1, 0].imshow(cos_sim_grid1, cmap='viridis', vmin=0, vmax=1)
+                    axs[1, 0].set_title(f"Original Frame {i-1} vs {i}")
+                    axs[1, 0].set_xlabel("Grid X")
+                    axs[1, 0].set_ylabel("Grid Y")
+                    fig.colorbar(im1, ax=axs[1, 0], fraction=0.046, pad=0.04)
+
+                    im2 = axs[1, 1].imshow(cos_sim_grid2, cmap='viridis', vmin=0, vmax=1)
+                    axs[1, 1].set_title(f"Warped vs Frame {i}")
+                    axs[1, 1].set_xlabel("Grid X")
+                    axs[1, 1].set_ylabel("Grid Y")
+                    fig.colorbar(im2, ax=axs[1, 1], fraction=0.046, pad=0.04)
+
+                    plt.suptitle(f"Frame {i} - Image & Cosine Similarity Comparison")
+
+                    save_path = os.path.join(save_dir, f"frame_{i}.png")
+                    plt.savefig(save_path)
+                    plt.close()
+
+                    print(f"✅ Saved combined image + heatmap: {save_path}")
+            # visualize_frame_cosine_heatmap(torch.stack(image_features, dim=0), save_dir='cosine_heatmaps')
+            # demo_visualize(image_features[0])
+            visual = False
+            if visual:
+                visualize_frame_cosine_heatmap(
+                    concat_images,
+                    warped_concat_images,
+                    torch.stack(image_features, dim=0).squeeze(),
+                    torch.stack(warped_image_features, dim=0).squeeze(),
+                    save_dir='warp_cosine_heatmaps'
+                )
             # image_features = self.encode_multimodals(concat_images, video_idx_in_batch, split_sizes)
             # rank_print(f"Encoded image feats : {[x.shape for x in image_features]}")
             # image_features = torch.split(image_features, split_sizes, dim=0)
@@ -322,6 +512,7 @@ class LlavaMetaForCausalLM(ABC):
                     # we want to first unflatten it to (2, 2, h, w, hidden_size)
                     # rank0_print("At least we are reaching here")
                     # import pdb; pdb.set_trace()
+                    warped_image_feature = warped_image_features[image_idx]
                     if image_idx in video_idx_in_batch:  # video operations
                         # rank0_print("Video")
                         if mm_newline_position == "grid":
@@ -352,18 +543,44 @@ class LlavaMetaForCausalLM(ABC):
                         elif mm_newline_position == "one_token":
                             # one-token
                             # 就在这里, image_feature的帧维度消失了
-                            # 消失之前的维度是(32, 196, 3584)
-                            # ================== Add Motion Token ==================
-                            # frame_num = image_feature.shape[0]
-                            # motion_languages = [f"Frame:{i:02d}" for i in range(frame_num)]
-                            # tokenizer_path = '/root/autodl-tmp/models/llava-onevision-qwen2-7b-ov'
-                            # tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
-                            # motion_input_ids = [tokenizer(motion_language, return_tensors='pt')['input_ids'].to(image_feature.device) for motion_language in motion_languages]
-                            # motion_input_embeds = [self.get_model().embed_tokens(motion_input_id).squeeze(0) for motion_input_id in motion_input_ids]
-                            # motion_input_embeds = torch.stack(motion_input_embeds)
-                            # image_feature = torch.cat([image_feature, motion_input_embeds], dim=1)
-                            # ======================================================
-                            image_feature = image_feature.flatten(0, 1)
+                            enable_H = False
+                            N, token_num, _ = image_feature.shape
+                            if enable_H:
+                                token_list = []
+                                for i in range(N):
+                                    if i == 0:
+                                        token_list.append(image_feature[0])
+                                        continue
+                                    else:
+                                        cur_frame_tokens = image_feature[i]
+                                        warp_frame_tokens = warped_image_feature[i]
+                                        prev_frame_tokens = image_feature[i-1]
+                                        tmp_token_list = []
+                                        for j in range(token_num):
+                                            cur_frame_token = cur_frame_tokens[j]
+                                            warp_frame_token = warp_frame_tokens[j]
+                                            prev_frame_token = prev_frame_tokens[j]
+                                            # 这一行用static
+                                            cos_sim = F.cosine_similarity(cur_frame_token.unsqueeze(0), warp_frame_token.unsqueeze(0), dim=1)  # 输出 shape [1]
+                                            # 这一行用Homo
+                                            # cos_sim = F.cosine_similarity(cur_frame_token.unsqueeze(0), warp_frame_token.unsqueeze(0), dim=1)  # 输出 shape [1]
+                                            cos_sim_value = cos_sim.item()  # 取数值
+                                            if cos_sim_value > 0.75:
+                                                continue
+                                            tmp_token_list.append(cur_frame_token)
+                                        if len(tmp_token_list) == 0:
+                                            continue
+                                        tmp_token = torch.stack(tmp_token_list, dim=0)
+                                        token_list.append(tmp_token)
+                                image_feature = torch.cat(token_list, dim=0)
+                            else:
+                                image_feature = image_feature.flatten(0, 1)
+                            # print(f'Compression Ratio: {image_feature.shape[0] / (N * token_num)}')
+                            # with open('/root/LLaVA-NeXT/vsi_phase2.txt', 'a') as f:
+                            #     f.write(f'Compression Ratio: {image_feature.shape[0] / (N * token_num)}\n')
+                            # image_feature = image_feature[0:5000]
+                            # ===============================================
+                            #image_feature = image_feature.flatten(0, 1)
                             if 'unpad' in mm_patch_merge_type:
                                 image_feature = torch.cat((
                                     image_feature,

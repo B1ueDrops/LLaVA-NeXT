@@ -298,6 +298,7 @@ def load_image_from_base64(image):
 
 
 def expand2square(pil_img, background_color):
+    background_color = (0, 0, 0)
     width, height = pil_img.size
     if width == height:
         return pil_img

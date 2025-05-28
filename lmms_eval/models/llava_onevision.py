@@ -5,6 +5,8 @@ import logging
 import os
 import math
 import re
+import time
+import cv2
 import warnings
 from datetime import timedelta
 from typing import List, Optional, Tuple, Union
@@ -25,6 +27,259 @@ from lmms_eval.api.instance import Instance
 from lmms_eval.api.model import lmms
 from lmms_eval.api.registry import register_model
 from lmms_eval.models.model_utils.load_video import read_video_pyav
+
+def extract_keyframes(frames, x):
+    """
+    Extract keyframes from the frame list based on the coincidence ratio.
+
+    Parameters：
+    - frames: A list containing video frames, with each frame being a numpy array
+    - x: Overlap ratio threshold, between 0 and 1
+
+    Return：
+    - keyframe_indices: Index list of keyframes
+    """
+    keyframe_indices = [0]  # Keep the first frame
+    prev_frame = frames[0]
+    prev_gray = cv2.cvtColor(prev_frame, cv2.COLOR_RGB2GRAY)
+
+    # Initialize feature detectors and matchers
+    orb = cv2.ORB_create()
+    prev_kp, prev_des = orb.detectAndCompute(prev_gray, None)
+    bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+
+    for t in range(1, len(frames)):
+        curr_frame = frames[t]
+        curr_gray = cv2.cvtColor(curr_frame, cv2.COLOR_RGB2GRAY)
+        curr_kp, curr_des = orb.detectAndCompute(curr_gray, None)
+
+        # Check if the descriptor is empty
+        if prev_des is None or curr_des is None:
+            # Unable to match, keep the current frame
+            keyframe_indices.append(t)
+            prev_frame = curr_frame
+            prev_gray = curr_gray
+            prev_kp = curr_kp
+            prev_des = curr_des
+            continue
+
+        # feature matching
+        matches = bf.match(prev_des, curr_des)
+        matches = sorted(matches, key=lambda x: x.distance)
+
+        # When there are enough matching points, estimate the transformation
+        if len(matches) > 10:
+            src_pts = np.float32([prev_kp[m.queryIdx].pt for m in matches]).reshape(-1, 1, 2)
+            dst_pts = np.float32([curr_kp[m.trainIdx].pt for m in matches]).reshape(-1, 1, 2)
+
+            # Estimate transformation matrix (e.g. perspective transformation)
+            M, mask = cv2.findHomography(dst_pts, src_pts, cv2.RANSAC, 5.0)
+
+            if M is not None:
+                # Calculate the proportion of overlapping areas
+                h, w = prev_gray.shape
+                corners_prev = np.float32([[0, 0], [w, 0], [w, h], [0, h]]).reshape(-1, 1, 2)
+                corners_curr_in_prev = cv2.perspectiveTransform(corners_prev, M)
+
+                # Calculate the overlapping area of two polygons
+                overlap_ratio = calculate_overlap_ratio(corners_prev, corners_curr_in_prev, w, h)
+
+                # Determine whether to retain the current frame based on the overlap ratio
+                if overlap_ratio < x:
+                    keyframe_indices.append(t)
+                    # Update the information of the former frame
+                    prev_frame = curr_frame
+                    prev_gray = curr_gray
+                    prev_kp = curr_kp
+                    prev_des = curr_des
+            else:
+                # Unable to calculate transformation, keep current frame
+                keyframe_indices.append(t)
+
+                # Update the information of the former frame
+                prev_frame = curr_frame
+                prev_gray = curr_gray
+                prev_kp = curr_kp
+                prev_des = curr_des
+        else:
+            # Too few matching points, keep the current frame
+            keyframe_indices.append(t)
+
+            # Update the information of the previous frame
+            prev_frame = curr_frame
+            prev_gray = curr_gray
+            prev_kp = curr_kp
+            prev_des = curr_des
+
+    if keyframe_indices[-1] != len(frames) - 1:
+        keyframe_indices.append(len(frames) - 1)
+    return keyframe_indices
+
+def calculate_overlap_ratio(corners1, corners2, width, height):
+    """
+    Calculate the overlap ratio of two polygons (image regions)
+
+    Parameters：
+    - corners1: The corner coordinates of the first polygon
+    - corners2: The corner coordinates of the second polygon
+    - width, height: Width and height of the image
+
+    Return：
+    - overlap_ratio: The ratio of overlapping area to total image area
+    """
+    # Convert coordinates into a format suitable for calculation
+    poly1 = np.array([c[0] for c in corners1], dtype=np.float32)
+    poly2 = np.array([c[0] for c in corners2], dtype=np.float32)
+
+    # Convert polygon coordinates to a format suitable for cv2.fillPoly
+    poly1_int = np.int32([poly1])
+    poly2_int = np.int32([poly2])
+
+    # Create black and white images
+    img1 = np.zeros((height, width), dtype=np.uint8)
+    img2 = np.zeros((height, width), dtype=np.uint8)
+
+    # draw a polygon
+    cv2.fillPoly(img1, poly1_int, 1)
+    cv2.fillPoly(img2, poly2_int, 1)
+
+    # Calculate overlapping areas
+    intersection = cv2.bitwise_and(img1, img2)
+    overlap_area = np.sum(intersection)
+    total_area = width * height
+    overlap_ratio = overlap_area / total_area
+    return overlap_ratio
+
+
+def sample_32_uniform(items):
+    n = len(items)
+    if n <= 32:
+        return items
+    else:
+        indices = [int(i * n / 32) for i in range(32)]
+        return [items[i] for i in indices]
+
+def calculate_overlap_ratio(corners1, corners2, width, height):
+    """
+    Calculate the overlap ratio of two polygons (image regions)
+
+    Parameters：
+    - corners1: The corner coordinates of the first polygon
+    - corners2: The corner coordinates of the second polygon
+    - width, height: Width and height of the image
+
+    Return：
+    - overlap_ratio: The ratio of overlapping area to total image area
+    """
+    # Convert coordinates into a format suitable for calculation
+    poly1 = np.array([c[0] for c in corners1], dtype=np.float32)
+    poly2 = np.array([c[0] for c in corners2], dtype=np.float32)
+
+    # Convert polygon coordinates to a format suitable for cv2.fillPoly
+    poly1_int = np.int32([poly1])
+    poly2_int = np.int32([poly2])
+
+    # Create black and white images
+    img1 = np.zeros((height, width), dtype=np.uint8)
+    img2 = np.zeros((height, width), dtype=np.uint8)
+
+    # draw a polygon
+    cv2.fillPoly(img1, poly1_int, 1)
+    cv2.fillPoly(img2, poly2_int, 1)
+
+    # Calculate overlapping areas
+    intersection = cv2.bitwise_and(img1, img2)
+    overlap_area = np.sum(intersection)
+    total_area = width * height
+    overlap_ratio = overlap_area / total_area
+    return overlap_ratio
+
+def extract_keyframes(frames, x):
+    """
+    Extract keyframes from the frame list based on the coincidence ratio.
+
+    Parameters：
+    - frames: A list containing video frames, with each frame being a numpy array
+    - x: Overlap ratio threshold, between 0 and 1
+
+    Return：
+    - keyframe_indices: Index list of keyframes
+    """
+    keyframe_indices = [0]  # Keep the first frame
+    prev_frame = frames[0]
+    prev_gray = cv2.cvtColor(prev_frame, cv2.COLOR_RGB2GRAY)
+
+    # Initialize feature detectors and matchers
+    orb = cv2.ORB_create()
+    prev_kp, prev_des = orb.detectAndCompute(prev_gray, None)
+    bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+
+    for t in range(1, len(frames)):
+        curr_frame = frames[t]
+        curr_gray = cv2.cvtColor(curr_frame, cv2.COLOR_RGB2GRAY)
+        curr_kp, curr_des = orb.detectAndCompute(curr_gray, None)
+
+        # Check if the descriptor is empty
+        if prev_des is None or curr_des is None:
+            # Unable to match, keep the current frame
+            keyframe_indices.append(t)
+            prev_frame = curr_frame
+            prev_gray = curr_gray
+            prev_kp = curr_kp
+            prev_des = curr_des
+            continue
+
+        # feature matching
+        matches = bf.match(prev_des, curr_des)
+        matches = sorted(matches, key=lambda x: x.distance)
+
+        # When there are enough matching points, estimate the transformation
+        if len(matches) > 10:
+            src_pts = np.float32([prev_kp[m.queryIdx].pt for m in matches]).reshape(-1, 1, 2)
+            dst_pts = np.float32([curr_kp[m.trainIdx].pt for m in matches]).reshape(-1, 1, 2)
+
+            # Estimate transformation matrix (e.g. perspective transformation)
+            M, mask = cv2.findHomography(dst_pts, src_pts, cv2.RANSAC, 5.0)
+
+            if M is not None:
+                # Calculate the proportion of overlapping areas
+                h, w = prev_gray.shape
+                corners_prev = np.float32([[0, 0], [w, 0], [w, h], [0, h]]).reshape(-1, 1, 2)
+                corners_curr_in_prev = cv2.perspectiveTransform(corners_prev, M)
+
+                # Calculate the overlapping area of two polygons
+                overlap_ratio = calculate_overlap_ratio(corners_prev, corners_curr_in_prev, w, h)
+
+                # Determine whether to retain the current frame based on the overlap ratio
+                if overlap_ratio < x:
+                    keyframe_indices.append(t)
+                    # Update the information of the former frame
+                    prev_frame = curr_frame
+                    prev_gray = curr_gray
+                    prev_kp = curr_kp
+                    prev_des = curr_des
+            else:
+                # Unable to calculate transformation, keep current frame
+                keyframe_indices.append(t)
+
+                # Update the information of the former frame
+                prev_frame = curr_frame
+                prev_gray = curr_gray
+                prev_kp = curr_kp
+                prev_des = curr_des
+        else:
+            # Too few matching points, keep the current frame
+            keyframe_indices.append(t)
+
+            # Update the information of the previous frame
+            prev_frame = curr_frame
+            prev_gray = curr_gray
+            prev_kp = curr_kp
+            prev_des = curr_des
+
+    if keyframe_indices[-1] != len(frames) - 1:
+        keyframe_indices.append(len(frames) - 1)
+    return keyframe_indices
 
 # Suppress warnings
 warnings.filterwarnings("ignore")
@@ -82,7 +337,7 @@ class Llava_OneVision(lmms):
         use_cache: Optional[bool] = True,
         truncate_context: Optional[bool] = False,  # whether to truncate the context in generation, set it False for LLaVA-1.6
         customized_config: Optional[str] = None,  # ends in json
-        max_frames_num: Optional[int] = 32,
+        max_frames_num: Optional[int] = 100,
         mm_spatial_pool_stride: Optional[int] = 2,
         mm_spatial_pool_mode: Optional[str] = "bilinear",
         token_strategy: Optional[str] = "single",  # could be "single" or "multiple", "multiple" denotes adding multiple <image> tokens for each frame
@@ -297,7 +552,7 @@ class Llava_OneVision(lmms):
                     image_tensor = []
                     try:
                         if self.video_decode_backend == "decord":
-                            frames = self.load_video(visual, self.max_frames_num)
+                            frames = self.load_video(visual,  self.max_frames_num)
                         elif self.video_decode_backend == "pyav":
                             frames = read_video_pyav(visual[0], num_frm=self.max_frames_num)
                         frames = self._image_processor.preprocess(frames, return_tensors="pt")["pixel_values"].half().cuda()
@@ -375,28 +630,44 @@ class Llava_OneVision(lmms):
                     new_list.append(j)
         return new_list
 
-    def load_video(self, video_path, max_frames_num):
-        max_frames_num = 64
-        if type(video_path) == str:
+    def load_video(self, video_path, max_frames_num=100):
+        if isinstance(video_path, str):
             vr = VideoReader(video_path, ctx=cpu(0))
             video_file_name = os.path.basename(video_path)
         else:
             vr = VideoReader(video_path[0], ctx=cpu(0))
             video_file_name = os.path.basename(video_path[0])
+
+        video_fps = vr.get_avg_fps()
         total_frame_num = len(vr)
-        # # ============== CLIP Sort ===============
-        target_video_info = None
-        if not os.path.exists('/root/LLaVA-NeXT/preprocess/vsi_bench_aks_64.json'):
-            uniform_sampled_frames = np.linspace(0, total_frame_num - 1, max_frames_num, dtype=int)
-            frame_idx = uniform_sampled_frames.tolist()
-            sparse_frames = vr.get_batch(frame_idx).asnumpy()
-            return sparse_frames  # (frames, height, width, channels)
-        with open('/root/LLaVA-NeXT/preprocess/vsi_bench_aks_64.json') as f:
-            video_infos = json.load(f)
-            for video_info in video_infos:
-                if video_info['video_id'] == video_file_name:
-                    target_video_info = video_info
-                    break
+        video_duration = total_frame_num / video_fps
+        max_frames_num = 95
+        # 按 1 fps 采样
+        frame_times = np.arange(0, min(int(video_duration), max_frames_num))
+        frame_idx = (frame_times * video_fps).astype(int)
+        frame_idx = np.clip(frame_idx, 0, total_frame_num - 1)
+
+        sparse_frames = vr.get_batch(frame_idx).asnumpy()
+        N = sparse_frames.shape[0]
+        sparse_frames_list = [sparse_frames[i] for i in range(sparse_frames.shape[0])]
+        keyframe_idx = extract_keyframes(sparse_frames_list, 0.5)
+        sparse_frames = [sparse_frames_list[k] for k in keyframe_idx]
+        sparse_frames = np.stack(sparse_frames, axis=0)
+        with open('/root/LLaVA-NeXT/vsi_embodiedr.txt', 'a') as f:
+            f.write(f'Compression Ratio: {sparse_frames.shape[0] / N}\n')
+        return sparse_frames
+
+        # if not os.path.exists('/root/LLaVA-NeXT/preprocess/vsi_bench_aks_64.json'):
+        #     uniform_sampled_frames = np.linspace(0, total_frame_num - 1, max_frames_num, dtype=int)
+        #     frame_idx = uniform_sampled_frames.tolist()
+        #     sparse_frames = vr.get_batch(frame_idx).asnumpy()
+        #     return sparse_frames  # (frames, height, width, channels)
+        # with open('/root/LLaVA-NeXT/preprocess/vsi_bench_aks_64.json') as f:
+        #     video_infos = json.load(f)
+        #     for video_info in video_infos:
+        #         if video_info['video_id'] == video_file_name:
+        #             target_video_info = video_info
+        #             break
         # # ========================================
         # if target_video_info is not None:
         #     clip_scores = np.array(target_video_info['scores'])
@@ -407,16 +678,22 @@ class Llava_OneVision(lmms):
         #     frame_idx = np.array([target_video_info['frames'][i] for i in idx])
         #     breakpoint()
         # else:
-        if target_video_info is None:
-            uniform_sampled_frames = np.linspace(0, total_frame_num - 1, max_frames_num, dtype=int)
-            frame_idx = uniform_sampled_frames.tolist()
-            sparse_frames = vr.get_batch(frame_idx).asnumpy()
-            return sparse_frames  # (frames, height, width, channels)
-        else:
-            uniform_sampled_frames = np.array(target_video_info['aks_res'])
-            frame_idx = uniform_sampled_frames.tolist()
-            sparse_frames = vr.get_batch(frame_idx).asnumpy()
-            return sparse_frames  # (frames, height, width, channels)
+        # if target_video_info is None:
+        # frame_indices = [int(i * fps) for i in range(int(total_frame_num // fps)) if int(i * fps) < total_frame_num]
+        # frames_nd = vr.get_batch(frame_indices)  # 形状: (N, H, W, C)
+        # frames_np = frames_nd.asnumpy()          # 转为 NumPy 数组
+        # frame_list = [frames_np[i] for i in range(frames_np.shape[0])]
+        # keyframe_list = extract_keyframes(frame_list, 0.5)
+        # frame_idx = sample_32_uniform(keyframe_list)
+        # # uniform_sampled_frames = np.linspace(0, total_frame_num - 1, max_frames_num, dtype=int)
+        # # frame_idx = uniform_sampled_frames.tolist()
+        # sparse_frames = vr.get_batch(frame_idx).asnumpy()
+        # return sparse_frames  # (frames, height, width, channels)
+        # else:
+        #     uniform_sampled_frames = np.array(target_video_info['aks_res'])
+        #     frame_idx = uniform_sampled_frames.tolist()
+        #     sparse_frames = vr.get_batch(frame_idx).asnumpy()
+        #     return sparse_frames  # (frames, height, width, channels)
 
 
     def generate_until(self, requests: List[Instance]) -> List[str]:
